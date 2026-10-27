@@ -90,25 +90,23 @@ class DownloadWorker @AssistedInject constructor(
                 dir.mkdirs()
                 dir.listFiles()?.filter { it.name != DownloadRepository.OPTIONS_FILE }?.forEach { it.deleteRecursively() }
 
-                val request = YoutubeDLRequest(url)
-                options.ytDlpOptions(dir).forEach { (option, argument) ->
-                    if (argument == null) request.addOption(option) else request.addOption(option, argument)
-                }
-                runInterruptible(Dispatchers.IO) {
-                    YoutubeDL.getInstance().execute(request, processId) { percent, _, line ->
-                        val step = if (line.contains("[ExtractAudio]") || line.contains("[EmbedThumbnail]") ||
-                            line.contains("[FFmpeg") || line.contains("[Metadata]")
-                        ) {
-                            Step.CONVERTING
-                        } else {
-                            progress.value.step
+                try {
+                    runInterruptible(Dispatchers.IO) { runYtDlp(url, dir, options, withSubtitles = true, progress) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val subtitleFailure = options.chaptersAndSubtitles &&
+                        e.message.orEmpty().contains("subtitle", ignoreCase = true)
+                    when {
+                        // O áudio chegou; o erro foi num extra (legenda, miniatura). Segue com o que há.
+                        findAudio(dir) != null -> Log.w(TAG, "yt-dlp terminou com erro, mas o áudio foi baixado", e)
+                        // A legenda é opcional: se só ela falhou (ex.: HTTP 429), baixa de novo sem legenda.
+                        subtitleFailure -> {
+                            Log.w(TAG, "Legendas falharam; repetindo sem legendas", e)
+                            dir.listFiles()?.filter { it.name != DownloadRepository.OPTIONS_FILE }?.forEach { it.deleteRecursively() }
+                            runInterruptible(Dispatchers.IO) { runYtDlp(url, dir, options, withSubtitles = false, progress) }
                         }
-                        val overall = when (step) {
-                            Step.DOWNLOADING -> (percent.coerceIn(0f, 100f) * 0.85f).toInt()
-                            Step.CONVERTING -> 90
-                            Step.CHAPTERS -> 95
-                        }
-                        progress.value = Progress(step, maxOf(overall, progress.value.percent))
+                        else -> throw e
                     }
                 }
 
@@ -148,6 +146,38 @@ class DownloadWorker @AssistedInject constructor(
         }
     }
 
+    private fun runYtDlp(
+        url: String,
+        dir: File,
+        options: DownloadOptions,
+        withSubtitles: Boolean,
+        progress: MutableStateFlow<Progress>,
+    ) {
+        val request = YoutubeDLRequest(url)
+        options.ytDlpOptions(dir, withSubtitles).forEach { (option, argument) ->
+            if (argument == null) request.addOption(option) else request.addOption(option, argument)
+        }
+        YoutubeDL.getInstance().execute(request, processId) { percent, _, line ->
+            val step = if (line.contains("[ExtractAudio]") || line.contains("[EmbedThumbnail]") ||
+                line.contains("[FFmpeg") || line.contains("[Metadata]")
+            ) {
+                Step.CONVERTING
+            } else {
+                progress.value.step
+            }
+            val overall = when (step) {
+                Step.DOWNLOADING -> (percent.coerceIn(0f, 100f) * 0.85f).toInt()
+                Step.CONVERTING -> 90
+                Step.CHAPTERS -> 95
+            }
+            progress.value = Progress(step, maxOf(overall, progress.value.percent))
+        }
+    }
+
+    private fun findAudio(dir: File): File? = dir.listFiles()
+        ?.filter { it.extension.lowercase() in AUDIO_EXTENSIONS && !it.name.endsWith(".part") }
+        ?.maxByOrNull { it.length() }
+
     private class DownloadResult(
         val audio: File,
         val title: String,
@@ -161,9 +191,7 @@ class DownloadWorker @AssistedInject constructor(
 
     private fun collectResult(dir: File, options: DownloadOptions): DownloadResult {
         val files = dir.listFiles()?.toList().orEmpty()
-        val audio = files
-            .filter { it.extension.lowercase() in AUDIO_EXTENSIONS && !it.name.endsWith(".part") }
-            .maxByOrNull { it.length() }
+        val audio = findAudio(dir)
             ?: throw IllegalStateException(applicationContext.getString(R.string.erro_audio_nao_encontrado))
         val info = files.firstOrNull { it.name.endsWith(".info.json") }
             ?.let { runCatching { InfoJson.parse(it.readText()) }.getOrNull() }

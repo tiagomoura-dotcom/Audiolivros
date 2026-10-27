@@ -9,19 +9,24 @@ data class DownloadOptions(
     val convertToMp3: Boolean = true,
     val thumbnailAsCover: Boolean = true,
 ) {
-    /** Argumentos do yt-dlp conforme a seção 4.2. */
-    fun ytDlpOptions(outputDir: File): List<Pair<String, String?>> = buildList {
+    /**
+     * Argumentos do yt-dlp conforme a seção 4.2. [withSubtitles] permite repetir o
+     * download sem legendas quando só elas falham (por exemplo, HTTP 429 do YouTube).
+     */
+    fun ytDlpOptions(outputDir: File, withSubtitles: Boolean = chaptersAndSubtitles): List<Pair<String, String?>> = buildList {
         add("-x" to null)
         add("--write-info-json" to null)
         add("--no-playlist" to null)
         add("-o" to File(outputDir, "%(title)s.%(ext)s").absolutePath)
         if (convertToMp3) add("--audio-format" to "mp3")
-        if (chaptersAndSubtitles) {
-            add("--embed-chapters" to null)
+        if (chaptersAndSubtitles) add("--embed-chapters" to null)
+        if (chaptersAndSubtitles && withSubtitles) {
             add("--write-auto-subs" to null)
             add("--write-subs" to null)
             add("--sub-langs" to "pt.*")
             add("--convert-subs" to "srt")
+            // Uma pausa entre as legendas reduz o bloqueio por excesso de pedidos.
+            add("--sleep-subtitles" to "1")
         }
         if (thumbnailAsCover) {
             add("--write-thumbnail" to null)
