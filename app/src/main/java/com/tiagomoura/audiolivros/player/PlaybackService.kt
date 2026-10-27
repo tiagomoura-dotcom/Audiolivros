@@ -29,6 +29,8 @@ import com.tiagomoura.audiolivros.MainActivity
 import com.tiagomoura.audiolivros.R
 import com.tiagomoura.audiolivros.core.database.Book
 import com.tiagomoura.audiolivros.core.database.BookDao
+import com.tiagomoura.audiolivros.core.database.Bookmark
+import com.tiagomoura.audiolivros.core.database.BookmarkDao
 import com.tiagomoura.audiolivros.core.database.ChapterDao
 import com.tiagomoura.audiolivros.core.database.PlaybackState
 import com.tiagomoura.audiolivros.core.database.PlaybackStateDao
@@ -64,6 +66,7 @@ class PlaybackService : MediaSessionService() {
     @Inject lateinit var bookDao: BookDao
     @Inject lateinit var playbackStateDao: PlaybackStateDao
     @Inject lateinit var chapterDao: ChapterDao
+    @Inject lateinit var bookmarkDao: BookmarkDao
     @Inject lateinit var settings: SettingsRepository
     @Inject @field:ApplicationScope lateinit var appScope: CoroutineScope
 
@@ -78,6 +81,12 @@ class PlaybackService : MediaSessionService() {
     @Volatile private var chapters: List<TimelineChapter> = emptyList()
     private var lastChapterIndex = -1
     private var speedAppliedFor: String? = null
+
+    /** Trecho tocando agora (seção 7): para no fim ou repete até o usuário parar. */
+    private data class PlaybackRange(val startMs: Long, val endMs: Long, val repeat: Boolean)
+    private var range: PlaybackRange? = null
+    private var rangeJob: Job? = null
+    private var internalSeek = false
 
     override fun onCreate() {
         super.onCreate()
@@ -211,6 +220,74 @@ class PlaybackService : MediaSessionService() {
                 .setSessionCommand(COMMAND_SEEK_FORWARD)
                 .setSlots(CommandButton.SLOT_FORWARD)
                 .build(),
+            CommandButton.Builder(CommandButton.ICON_UNDEFINED)
+                .setCustomIconResId(R.drawable.ic_bookmark_add)
+                .setDisplayName(getString(R.string.marcar))
+                .setSessionCommand(COMMAND_ADD_BOOKMARK)
+                .setSlots(CommandButton.SLOT_OVERFLOW)
+                .build(),
+        )
+    }
+
+    /** Botão Marcar da notificação: cria um ponto sem desbloquear o celular. */
+    private fun addBookmarkFromNotification() {
+        val bookId = player.currentMediaItem?.mediaId ?: return
+        val position = player.currentPosition.coerceAtLeast(0)
+        val note = getString(R.string.marcado_pela_notificacao)
+        appScope.launch(Dispatchers.IO) {
+            runCatching {
+                bookmarkDao.insert(
+                    Bookmark(bookId = bookId, startMs = position, endMs = null, note = note, createdAt = System.currentTimeMillis()),
+                )
+            }
+        }
+    }
+
+    private fun playRange(startMs: Long, endMs: Long, repeat: Boolean) {
+        if (endMs <= startMs) return
+        range = PlaybackRange(startMs, endMs, repeat)
+        seekInternally(startMs)
+        player.play()
+        rangeJob?.cancel()
+        rangeJob = serviceScope.launch {
+            while (isActive) {
+                delay(RANGE_CHECK_MS)
+                val current = range ?: break
+                if (player.currentPosition >= current.endMs) {
+                    if (current.repeat) {
+                        seekInternally(current.startMs)
+                    } else {
+                        player.pause()
+                        stopRange()
+                    }
+                }
+            }
+        }
+        publishState()
+    }
+
+    private fun stopRange() {
+        range = null
+        rangeJob?.cancel()
+        rangeJob = null
+        publishState()
+    }
+
+    private fun seekInternally(positionMs: Long) {
+        internalSeek = true
+        player.seekTo(positionMs)
+    }
+
+    /** Estado extra para as telas (trecho e, no marco 6, timer), nos extras da sessão. */
+    private fun publishState() {
+        val current = range
+        session?.setSessionExtras(
+            bundleOf(
+                EXTRA_RANGE_ACTIVE to (current != null),
+                EXTRA_RANGE_START to (current?.startMs ?: 0L),
+                EXTRA_RANGE_END to (current?.endMs ?: 0L),
+                EXTRA_RANGE_REPEAT to (current?.repeat ?: false),
+            ),
         )
     }
 
@@ -284,6 +361,10 @@ class PlaybackService : MediaSessionService() {
             val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(COMMAND_SEEK_BACK)
                 .add(COMMAND_SEEK_FORWARD)
+                .add(COMMAND_ADD_BOOKMARK)
+                .add(COMMAND_PLAY_RANGE)
+                .add(COMMAND_STOP_RANGE)
+                .add(COMMAND_SET_RANGE_REPEAT)
                 .build()
             val builder = MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
@@ -309,6 +390,17 @@ class PlaybackService : MediaSessionService() {
             when (customCommand.customAction) {
                 ACTION_SEEK_BACK -> player.seekBack()
                 ACTION_SEEK_FORWARD -> player.seekForward()
+                ACTION_ADD_BOOKMARK -> addBookmarkFromNotification()
+                ACTION_PLAY_RANGE -> playRange(
+                    args.getLong(ARG_START_MS),
+                    args.getLong(ARG_END_MS),
+                    args.getBoolean(ARG_REPEAT),
+                )
+                ACTION_STOP_RANGE -> stopRange()
+                ACTION_SET_RANGE_REPEAT -> range?.let {
+                    range = it.copy(repeat = args.getBoolean(ARG_REPEAT))
+                    publishState()
+                }
                 else -> return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -383,6 +475,8 @@ class PlaybackService : MediaSessionService() {
             reason: Int,
         ) {
             if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                // Uma busca do usuário encerra o trecho; as do próprio trecho, não.
+                if (internalSeek) internalSeek = false else if (range != null) stopRange()
                 savePosition()
                 updateSessionMetadata()
             }
@@ -409,5 +503,24 @@ class PlaybackService : MediaSessionService() {
         const val ACTION_SEEK_FORWARD = "audiolivros.AVANCAR"
         val COMMAND_SEEK_BACK = SessionCommand(ACTION_SEEK_BACK, Bundle.EMPTY)
         val COMMAND_SEEK_FORWARD = SessionCommand(ACTION_SEEK_FORWARD, Bundle.EMPTY)
+
+        const val ACTION_ADD_BOOKMARK = "audiolivros.MARCAR"
+        const val ACTION_PLAY_RANGE = "audiolivros.TOCAR_TRECHO"
+        const val ACTION_STOP_RANGE = "audiolivros.PARAR_TRECHO"
+        const val ACTION_SET_RANGE_REPEAT = "audiolivros.REPETIR_TRECHO"
+        val COMMAND_ADD_BOOKMARK = SessionCommand(ACTION_ADD_BOOKMARK, Bundle.EMPTY)
+        val COMMAND_PLAY_RANGE = SessionCommand(ACTION_PLAY_RANGE, Bundle.EMPTY)
+        val COMMAND_STOP_RANGE = SessionCommand(ACTION_STOP_RANGE, Bundle.EMPTY)
+        val COMMAND_SET_RANGE_REPEAT = SessionCommand(ACTION_SET_RANGE_REPEAT, Bundle.EMPTY)
+
+        const val ARG_START_MS = "inicio"
+        const val ARG_END_MS = "fim"
+        const val ARG_REPEAT = "repetir"
+
+        const val EXTRA_RANGE_ACTIVE = "trecho.ativo"
+        const val EXTRA_RANGE_START = "trecho.inicio"
+        const val EXTRA_RANGE_END = "trecho.fim"
+        const val EXTRA_RANGE_REPEAT = "trecho.repetir"
+        private const val RANGE_CHECK_MS = 100L
     }
 }

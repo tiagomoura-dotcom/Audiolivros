@@ -2,6 +2,7 @@ package com.tiagomoura.audiolivros.player
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.FastForward
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PhotoCamera
@@ -44,6 +48,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,6 +67,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -71,7 +77,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -114,6 +123,11 @@ fun PlayerScreen(
         }
     }
     var menuOpen by remember { mutableStateOf(false) }
+    var noteDialog by remember { mutableStateOf<NoteDialog?>(null) }
+
+    LaunchedEffect(viewModel) {
+        viewModel.noteRequestFlow.collect { id -> noteDialog = NoteDialog(id, "") }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -226,6 +240,24 @@ fun PlayerScreen(
 
             Spacer(Modifier.height(20.dp))
             ChapterSeekBar(state = state, onSeek = viewModel::seekInChapter)
+            state.pendingRangeStartMs?.let { start ->
+                Text(
+                    text = stringResource(R.string.marcando_trecho_desde, formatDuration(start)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Destaque,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                )
+            }
+            if (state.rangeActive) {
+                RangePlayingBar(
+                    state = state,
+                    onRepeat = viewModel::setRangeRepeat,
+                    onStop = viewModel::stopRange,
+                )
+            }
 
             Spacer(Modifier.height(16.dp))
             Controls(
@@ -251,11 +283,18 @@ fun PlayerScreen(
                 ActionButton(Icons.Outlined.Timer, stringResource(R.string.timer), Modifier.weight(1f)) {
                     notAvailable(R.string.timer)
                 }
-                ActionButton(Icons.Outlined.BookmarkAdd, stringResource(R.string.marcar), Modifier.weight(1f)) {
-                    notAvailable(R.string.marcar)
+                ActionButton(Icons.Outlined.BookmarkAdd, stringResource(R.string.marcar), Modifier.weight(1f), state.isCurrent) {
+                    viewModel.markPoint()
                 }
-                ActionButton(Icons.Outlined.ContentCut, stringResource(R.string.trecho), Modifier.weight(1f)) {
-                    notAvailable(R.string.trecho)
+                ActionButton(
+                    icon = if (state.pendingRangeStartMs != null) Icons.Outlined.Check else Icons.Outlined.ContentCut,
+                    label = stringResource(if (state.pendingRangeStartMs != null) R.string.concluir else R.string.trecho),
+                    modifier = Modifier.weight(1f),
+                    enabled = state.isCurrent,
+                    highlighted = state.pendingRangeStartMs != null,
+                    onLongClick = viewModel::cancelPendingRange,
+                ) {
+                    viewModel.toggleRange()
                 }
             }
 
@@ -273,13 +312,93 @@ fun PlayerScreen(
             }
 
             Spacer(Modifier.height(20.dp))
-            ChaptersAndBookmarks(state = state, onPlayChapter = viewModel::playChapter)
+            ChaptersAndBookmarks(
+                state = state,
+                onPlayChapter = viewModel::playChapter,
+                onPlayBookmark = viewModel::playBookmark,
+                onEditNote = { noteDialog = NoteDialog(it.id, it.note.orEmpty()) },
+                onDeleteBookmark = { viewModel.deleteBookmark(it.id) },
+            )
+        }
+    }
+
+    noteDialog?.let { current ->
+        NoteEditor(
+            initial = current.initial,
+            onSave = { note ->
+                viewModel.updateNote(current.bookmarkId, note)
+                noteDialog = null
+            },
+            onDismiss = { noteDialog = null },
+        )
+    }
+}
+
+private data class NoteDialog(val bookmarkId: Long, val initial: String)
+
+@Composable
+private fun NoteEditor(initial: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by rememberSaveable { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.nota)) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text(stringResource(R.string.nota_opcional)) },
+                minLines = 2,
+                maxLines = 5,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = { TextButton(onClick = { onSave(text) }) { Text(stringResource(R.string.salvar)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.dispensar)) } },
+    )
+}
+
+@Composable
+private fun RangePlayingBar(state: PlayerScreenState, onRepeat: (Boolean) -> Unit, onStop: () -> Unit) {
+    Surface(
+        color = Superficie,
+        contentColor = Texto,
+        shape = Raios.Botao,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 14.dp)) {
+            Text(
+                text = stringResource(
+                    R.string.tocando_trecho,
+                    formatDuration(state.rangeStartMs),
+                    formatDuration(state.rangeEndMs),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = { onRepeat(!state.rangeRepeat) }) {
+                Icon(
+                    Icons.Outlined.Repeat,
+                    contentDescription = stringResource(R.string.repetir_trecho),
+                    tint = if (state.rangeRepeat) Destaque else TextoSecundario,
+                )
+            }
+            IconButton(onClick = onStop) {
+                Icon(Icons.Outlined.Stop, contentDescription = stringResource(R.string.parar_trecho))
+            }
         }
     }
 }
 
 @Composable
-private fun ChaptersAndBookmarks(state: PlayerScreenState, onPlayChapter: (Long) -> Unit) {
+private fun ChaptersAndBookmarks(
+    state: PlayerScreenState,
+    onPlayChapter: (Long) -> Unit,
+    onPlayBookmark: (BookmarkItem, Boolean) -> Unit,
+    onEditNote: (BookmarkItem) -> Unit,
+    onDeleteBookmark: (BookmarkItem) -> Unit,
+) {
     var tab by rememberSaveable { mutableStateOf(0) }
     Column(modifier = Modifier.fillMaxWidth()) {
         SecondaryTabRow(
@@ -333,13 +452,25 @@ private fun ChaptersAndBookmarks(state: PlayerScreenState, onPlayChapter: (Long)
                     onClick = { onPlayChapter(chapter.startMs) },
                 )
             }
-        } else {
+        } else if (state.bookmarks.isEmpty()) {
             Text(
                 text = stringResource(R.string.sem_marcacoes),
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextoSecundario,
                 modifier = Modifier.padding(vertical = 16.dp),
             )
+        } else {
+            Spacer(Modifier.height(4.dp))
+            state.bookmarks.forEach { bookmark ->
+                BookmarkRow(
+                    bookmark = bookmark,
+                    enabled = state.isCurrent,
+                    onPlay = { onPlayBookmark(bookmark, false) },
+                    onRepeat = { onPlayBookmark(bookmark, true) },
+                    onEditNote = { onEditNote(bookmark) },
+                    onDelete = { onDeleteBookmark(bookmark) },
+                )
+            }
         }
     }
 }
@@ -384,26 +515,103 @@ private fun ChapterRow(chapter: ChapterPosition, isCurrent: Boolean, listened: B
     HorizontalDivider(color = Divisoria)
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ActionButton(icon: ImageVector, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun BookmarkRow(
+    bookmark: BookmarkItem,
+    enabled: Boolean,
+    onPlay: () -> Unit,
+    onRepeat: () -> Unit,
+    onEditNote: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp)
+                .combinedClickable(onClick = onPlay, onLongClick = { menuOpen = true })
+                .padding(vertical = 6.dp),
+        ) {
+            IconButton(onClick = onPlay, enabled = enabled) {
+                Icon(Icons.Outlined.PlayArrow, contentDescription = stringResource(R.string.tocar), tint = Destaque)
+            }
+            Spacer(Modifier.width(4.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = bookmark.chapterTitle ?: stringResource(R.string.capitulo_numero, bookmark.chapterNumber),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextoSecundario,
+                    maxLines = 1,
+                )
+                Text(
+                    text = bookmark.endMs?.let { end ->
+                        stringResource(R.string.marcacao_trecho, formatDuration(bookmark.startMs), formatDuration(end))
+                    } ?: stringResource(R.string.marcacao_ponto, formatDuration(bookmark.startMs)),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                bookmark.note?.let { note ->
+                    Text(text = note, style = MaterialTheme.typography.bodySmall, color = TextoSecundario, maxLines = 3)
+                }
+            }
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            if (bookmark.isRange) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.repetir_trecho)) },
+                    leadingIcon = { Icon(Icons.Outlined.Repeat, contentDescription = null) },
+                    enabled = enabled,
+                    onClick = { menuOpen = false; onRepeat() },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.editar_nota)) },
+                onClick = { menuOpen = false; onEditNote() },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.excluir)) },
+                leadingIcon = { Icon(Icons.Outlined.Close, contentDescription = null) },
+                onClick = { menuOpen = false; onDelete() },
+            )
+        }
+    }
+    HorizontalDivider(color = Divisoria)
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ActionButton(
+    icon: ImageVector,
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    highlighted: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     Surface(
         color = Superficie,
-        contentColor = Texto,
+        contentColor = if (highlighted) Destaque else Texto,
         shape = Raios.Botao,
+        border = if (highlighted) androidx.compose.foundation.BorderStroke(1.dp, Destaque) else null,
         modifier = modifier
             .heightIn(min = 64.dp)
-            .clickable(onClick = onClick),
+            .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = onLongClick),
     ) {
-        ActionButtonContent(icon, label)
+        ActionButtonContent(icon, label, if (enabled) 1f else 0.4f)
     }
 }
 
 @Composable
-private fun ActionButtonContent(icon: ImageVector, label: String) {
+private fun ActionButtonContent(icon: ImageVector, label: String, alpha: Float = 1f) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
-        modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+        modifier = Modifier
+            .padding(vertical = 10.dp, horizontal = 4.dp)
+            .alpha(alpha),
     ) {
         Icon(icon, contentDescription = null, tint = TextoSecundario)
         Spacer(Modifier.height(4.dp))
@@ -418,6 +626,7 @@ private fun ChapterSeekBar(state: PlayerScreenState, onSeek: (Float) -> Unit) {
     val shownElapsed = (state.chapter.durationMs * fraction).toLong()
 
     Column(modifier = Modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Slider(
             value = fraction,
             onValueChange = { dragFraction = it },
@@ -432,6 +641,8 @@ private fun ChapterSeekBar(state: PlayerScreenState, onSeek: (Float) -> Unit) {
                 inactiveTrackColor = Borda,
             ),
         )
+        BookmarkMarks(state = state, modifier = Modifier.matchParentSize())
+        }
         Row(modifier = Modifier.fillMaxWidth()) {
             Text(
                 text = formatDuration(shownElapsed),
@@ -568,5 +779,39 @@ private fun SpeedButton(speed: Float, onCycle: () -> Unit, onSetSpeed: (Float) -
                 TextButton(onClick = { fineTuning = false }) { Text(stringResource(R.string.cancelar)) }
             },
         )
+    }
+}
+
+/** Marcações na barra do capítulo: ponto = risco vertical, trecho = faixa clara. */
+@Composable
+private fun BookmarkMarks(state: PlayerScreenState, modifier: Modifier = Modifier) {
+    val marks = state.chapterBookmarks
+    val chapterStart = state.chapter.startMs
+    val chapterDuration = state.chapter.durationMs
+    if (marks.isEmpty() || chapterDuration <= 0) return
+    Canvas(modifier = modifier) {
+        val inset = 2.dp.toPx()
+        val width = size.width - inset * 2
+        fun x(ms: Long) = inset + width * ((ms - chapterStart).toFloat() / chapterDuration).coerceIn(0f, 1f)
+        val centerY = size.height / 2
+        val bandHeight = 12.dp.toPx()
+        val tickHeight = 18.dp.toPx()
+        marks.forEach { mark ->
+            val end = mark.endMs
+            if (end != null) {
+                drawRect(
+                    color = Texto.copy(alpha = 0.28f),
+                    topLeft = Offset(x(mark.startMs), centerY - bandHeight / 2),
+                    size = Size((x(end) - x(mark.startMs)).coerceAtLeast(2.dp.toPx()), bandHeight),
+                )
+            } else {
+                drawLine(
+                    color = Texto,
+                    start = Offset(x(mark.startMs), centerY - tickHeight / 2),
+                    end = Offset(x(mark.startMs), centerY + tickHeight / 2),
+                    strokeWidth = 2.dp.toPx(),
+                )
+            }
+        }
     }
 }

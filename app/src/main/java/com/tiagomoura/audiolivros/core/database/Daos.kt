@@ -98,6 +98,24 @@ abstract class ChapterDao {
 interface BookmarkDao {
     @Query("SELECT * FROM bookmarks WHERE bookId = :bookId ORDER BY startMs")
     fun observeForBook(bookId: String): Flow<List<Bookmark>>
+
+    @Query("SELECT * FROM bookmarks WHERE bookId = :bookId ORDER BY startMs")
+    suspend fun getForBook(bookId: String): List<Bookmark>
+
+    @Insert
+    suspend fun insert(bookmark: Bookmark): Long
+
+    @Insert
+    suspend fun insertAll(bookmarks: List<Bookmark>)
+
+    @Query("UPDATE bookmarks SET note = :note WHERE id = :id")
+    suspend fun updateNote(id: Long, note: String?)
+
+    @Query("DELETE FROM bookmarks WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM bookmarks WHERE bookId = :bookId")
+    suspend fun deleteForBook(bookId: String)
 }
 
 @Dao

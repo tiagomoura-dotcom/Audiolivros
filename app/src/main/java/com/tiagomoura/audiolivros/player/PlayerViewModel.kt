@@ -5,18 +5,35 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tiagomoura.audiolivros.core.database.Book
 import com.tiagomoura.audiolivros.core.database.BookDao
-import com.tiagomoura.audiolivros.core.database.BookmarkDao
+import com.tiagomoura.audiolivros.bookmarks.BookmarkRepository
+import com.tiagomoura.audiolivros.core.database.Bookmark
 import com.tiagomoura.audiolivros.core.database.ChapterDao
 import com.tiagomoura.audiolivros.core.database.ChapterSource
 import com.tiagomoura.audiolivros.settings.PlaybackSettings
 import com.tiagomoura.audiolivros.settings.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
+/** Marcação como mostrada no player, com o capítulo correspondente. */
+data class BookmarkItem(
+    val id: Long,
+    val startMs: Long,
+    val endMs: Long?,
+    val note: String?,
+    val chapterNumber: Int,
+    val chapterTitle: String?,
+) {
+    val isRange: Boolean get() = endMs != null
+}
 
 data class PlayerScreenState(
     val loading: Boolean = true,
@@ -30,24 +47,39 @@ data class PlayerScreenState(
     val speed: Float = 1f,
     val chapter: ChapterPosition = ChapterPosition(0, 1, null, 0, 0),
     val chapters: List<ChapterPosition> = emptyList(),
-    val bookmarkCount: Int = 0,
+    val bookmarks: List<BookmarkItem> = emptyList(),
+    /** Início do trecho sendo marcado (entre o primeiro toque em Trecho e o Concluir). */
+    val pendingRangeStartMs: Long? = null,
+    val rangeActive: Boolean = false,
+    val rangeStartMs: Long = 0,
+    val rangeEndMs: Long = 0,
+    val rangeRepeat: Boolean = false,
     val chapterSource: ChapterSource? = null,
     val skipSeconds: Int = PlaybackSettings.DEFAULT_SKIP_SECONDS,
 ) {
     val bookProgress: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
     val chapterElapsedMs: Long get() = (positionMs - chapter.startMs).coerceAtLeast(0)
+    val bookmarkCount: Int get() = bookmarks.size
+
+    /** Marcações dentro do capítulo atual, para desenhar na barra. */
+    val chapterBookmarks: List<BookmarkItem>
+        get() = bookmarks.filter { b ->
+            val end = b.endMs ?: b.startMs
+            end >= chapter.startMs && b.startMs <= chapter.endMs
+        }
+
     val chapterProgress: Float
         get() = if (chapter.durationMs > 0) (chapterElapsedMs.toFloat() / chapter.durationMs).coerceIn(0f, 1f) else 0f
 }
 
-private data class BookTimeline(val book: Book?, val chapters: List<TimelineChapter>, val bookmarkCount: Int)
+private data class BookTimeline(val book: Book?, val chapters: List<TimelineChapter>, val bookmarks: List<Bookmark>)
 
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     bookDao: BookDao,
     chapterDao: ChapterDao,
-    bookmarkDao: BookmarkDao,
+    private val bookmarkRepository: BookmarkRepository,
     settings: SettingsRepository,
     private val player: PlayerConnection,
 ) : ViewModel() {
@@ -57,16 +89,23 @@ class PlayerViewModel @Inject constructor(
     private val timeline = combine(
         bookDao.observe(bookId),
         chapterDao.observeForBook(bookId),
-        bookmarkDao.observeForBook(bookId),
+        bookmarkRepository.observe(bookId),
     ) { book, chapters, bookmarks ->
-        BookTimeline(book, chapters.map { TimelineChapter(it.title, it.startMs) }, bookmarks.size)
+        BookTimeline(book, chapters.map { TimelineChapter(it.title, it.startMs) }, bookmarks)
     }
+
+    private val pendingRangeStart = MutableStateFlow<Long?>(null)
+    private val noteRequests = Channel<Long>(Channel.BUFFERED)
+
+    /** Id da marcação recém-criada, para abrir o campo opcional de nota. */
+    val noteRequestFlow = noteRequests.receiveAsFlow()
 
     val state: StateFlow<PlayerScreenState> = combine(
         timeline,
         player.state,
         settings.playback.map { it.skipIntervalSeconds },
-    ) { (book, chapters, bookmarkCount), playerState, skipSeconds ->
+        pendingRangeStart,
+    ) { (book, chapters, bookmarks), playerState, skipSeconds, pendingStart ->
         if (book == null) return@combine PlayerScreenState(loading = false)
         val isCurrent = playerState.connected && playerState.bookId == book.id
         val duration = if (isCurrent && playerState.durationMs > 0) playerState.durationMs else book.durationMs
@@ -83,7 +122,15 @@ class PlayerViewModel @Inject constructor(
             speed = if (isCurrent) playerState.speed else 1f,
             chapter = chapterTimeline.positionAt(position),
             chapters = chapterTimeline.all(),
-            bookmarkCount = bookmarkCount,
+            bookmarks = bookmarks.map { bookmark ->
+                val at = chapterTimeline.positionAt(bookmark.startMs)
+                BookmarkItem(bookmark.id, bookmark.startMs, bookmark.endMs, bookmark.note, at.index + 1, at.title)
+            },
+            pendingRangeStartMs = pendingStart,
+            rangeActive = isCurrent && playerState.rangeActive,
+            rangeStartMs = playerState.rangeStartMs,
+            rangeEndMs = playerState.rangeEndMs,
+            rangeRepeat = playerState.rangeRepeat,
             chapterSource = book.chapterSource,
             skipSeconds = skipSeconds,
         )
@@ -126,6 +173,59 @@ class PlayerViewModel @Inject constructor(
     fun cycleSpeed() = player.setSpeed(PlaybackSpeed.next(state.value.speed))
 
     fun setSpeed(speed: Float) = player.setSpeed(PlaybackSpeed.normalize(speed))
+
+    // ---------- Marcações (seção 7) ----------
+
+    /** Botão Marcar: ponto na posição atual; depois abre o campo opcional de nota. */
+    fun markPoint() {
+        val current = state.value
+        if (!current.isCurrent) return
+        viewModelScope.launch {
+            noteRequests.send(bookmarkRepository.addPoint(bookId, current.positionMs))
+        }
+    }
+
+    /** Botão Trecho: o primeiro toque marca o início; o segundo (Concluir) cria o trecho. */
+    fun toggleRange() {
+        val current = state.value
+        if (!current.isCurrent) return
+        val start = pendingRangeStart.value
+        if (start == null) {
+            pendingRangeStart.value = current.positionMs
+            return
+        }
+        pendingRangeStart.value = null
+        if (start == current.positionMs) return
+        viewModelScope.launch {
+            noteRequests.send(bookmarkRepository.addRange(bookId, start, current.positionMs))
+        }
+    }
+
+    fun cancelPendingRange() {
+        pendingRangeStart.value = null
+    }
+
+    /** Ponto: vai para a posição e toca. Trecho: toca do início e pausa no fim (ou repete). */
+    fun playBookmark(item: BookmarkItem, repeat: Boolean = false) {
+        val end = item.endMs
+        if (end == null) {
+            player.playFrom(bookId, item.startMs)
+        } else {
+            player.playRange(item.startMs, end, repeat)
+        }
+    }
+
+    fun setRangeRepeat(repeat: Boolean) = player.setRangeRepeat(repeat)
+
+    fun stopRange() = player.stopRange()
+
+    fun updateNote(id: Long, note: String) {
+        viewModelScope.launch { bookmarkRepository.updateNote(id, note) }
+    }
+
+    fun deleteBookmark(id: Long) {
+        viewModelScope.launch { bookmarkRepository.delete(id) }
+    }
 
     companion object {
         const val ARG_BOOK_ID = "bookId"

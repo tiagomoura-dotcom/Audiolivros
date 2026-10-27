@@ -2,6 +2,8 @@ package com.tiagomoura.audiolivros.player
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.Bundle
+import androidx.core.os.bundleOf
 import androidx.core.content.ContextCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -33,6 +35,11 @@ data class PlayerUiState(
     /** Duração informada pelo player, ou 0 se ainda desconhecida. */
     val durationMs: Long = 0,
     val speed: Float = 1f,
+    /** Trecho de marcação tocando agora, se houver. */
+    val rangeActive: Boolean = false,
+    val rangeStartMs: Long = 0,
+    val rangeEndMs: Long = 0,
+    val rangeRepeat: Boolean = false,
 )
 
 /**
@@ -56,7 +63,11 @@ class PlayerConnection @Inject constructor(
 
     init {
         val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
-        val future = MediaController.Builder(context, token).buildAsync()
+        val future = MediaController.Builder(context, token)
+            .setListener(object : MediaController.Listener {
+                override fun onExtrasChanged(controller: MediaController, extras: Bundle) = refresh()
+            })
+            .buildAsync()
         future.addListener(
             {
                 val connected = runCatching { future.get() }.getOrNull() ?: return@addListener
@@ -84,6 +95,7 @@ class PlayerConnection @Inject constructor(
     private fun refresh() {
         val c = controller ?: return
         val duration = c.duration
+        val extras = c.sessionExtras
         _state.value = PlayerUiState(
             connected = true,
             bookId = c.currentMediaItem?.mediaId,
@@ -93,6 +105,10 @@ class PlayerConnection @Inject constructor(
             positionMs = c.currentPosition.coerceAtLeast(0),
             durationMs = if (duration == C.TIME_UNSET || duration < 0) 0 else duration,
             speed = c.playbackParameters.speed,
+            rangeActive = extras.getBoolean(PlaybackService.EXTRA_RANGE_ACTIVE),
+            rangeStartMs = extras.getLong(PlaybackService.EXTRA_RANGE_START),
+            rangeEndMs = extras.getLong(PlaybackService.EXTRA_RANGE_END),
+            rangeRepeat = extras.getBoolean(PlaybackService.EXTRA_RANGE_REPEAT),
         )
     }
 
@@ -132,6 +148,24 @@ class PlayerConnection @Inject constructor(
     }
 
     fun pause() = withController { it.pause() }
+
+    /** Toca um trecho: do início ao fim, pausando no fim, ou em loop se [repeat]. */
+    fun playRange(startMs: Long, endMs: Long, repeat: Boolean) = withController {
+        it.sendCustomCommand(
+            PlaybackService.COMMAND_PLAY_RANGE,
+            bundleOf(
+                PlaybackService.ARG_START_MS to startMs,
+                PlaybackService.ARG_END_MS to endMs,
+                PlaybackService.ARG_REPEAT to repeat,
+            ),
+        )
+    }
+
+    fun setRangeRepeat(repeat: Boolean) = withController {
+        it.sendCustomCommand(PlaybackService.COMMAND_SET_RANGE_REPEAT, bundleOf(PlaybackService.ARG_REPEAT to repeat))
+    }
+
+    fun stopRange() = withController { it.sendCustomCommand(PlaybackService.COMMAND_STOP_RANGE, Bundle.EMPTY) }
 
     fun seekBack() = withController { it.seekBack() }
 
