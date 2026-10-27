@@ -100,6 +100,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun PlayerScreen(
     onBack: () -> Unit,
+    onEditChapters: (reanalyze: Boolean) -> Unit,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -141,7 +142,11 @@ fun PlayerScreen(
                                     text = { Text(stringResource(item)) },
                                     onClick = {
                                         menuOpen = false
-                                        notAvailable(item)
+                                        when (item) {
+                                            R.string.editar_capitulos -> onEditChapters(false)
+                                            R.string.reanalisar_capitulos -> onEditChapters(true)
+                                            else -> notAvailable(item)
+                                        }
                                     },
                                 )
                             }

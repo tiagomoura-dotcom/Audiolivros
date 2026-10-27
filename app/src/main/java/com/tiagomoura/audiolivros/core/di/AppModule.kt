@@ -6,6 +6,7 @@ import com.tiagomoura.audiolivros.core.database.AppDatabase
 import com.tiagomoura.audiolivros.core.database.BookDao
 import com.tiagomoura.audiolivros.core.database.BookmarkDao
 import com.tiagomoura.audiolivros.core.database.ChapterDao
+import com.tiagomoura.audiolivros.core.database.MIGRATION_1_2
 import com.tiagomoura.audiolivros.core.database.PlaybackStateDao
 import dagger.Module
 import dagger.Provides
@@ -30,7 +31,9 @@ object AppModule {
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
-        Room.databaseBuilder(context, AppDatabase::class.java, "audiolivros.db").build()
+        Room.databaseBuilder(context, AppDatabase::class.java, "audiolivros.db")
+            .addMigrations(MIGRATION_1_2)
+            .build()
 
     @Provides
     fun provideBookDao(db: AppDatabase): BookDao = db.bookDao()

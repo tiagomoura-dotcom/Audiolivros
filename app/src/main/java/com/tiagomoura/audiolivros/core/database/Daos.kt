@@ -4,6 +4,8 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
+import androidx.room.Update
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
@@ -46,17 +48,50 @@ interface BookDao {
     @Query("UPDATE books SET durationMs = :durationMs WHERE id = :id AND durationMs <= 0")
     suspend fun updateDurationIfUnknown(id: String, durationMs: Long)
 
+    @Query("UPDATE books SET chapterSource = :source WHERE id = :id")
+    suspend fun updateChapterSource(id: String, source: ChapterSource?)
+
+    @Query("UPDATE books SET status = :status, processingProgress = :progress, errorMessage = :error WHERE id = :id")
+    suspend fun updateStatus(id: String, status: BookStatus, progress: Int, error: String? = null)
+
+    @Query("UPDATE books SET processingProgress = :progress WHERE id = :id")
+    suspend fun updateProgress(id: String, progress: Int)
+
+    @Query("SELECT * FROM books")
+    suspend fun getAll(): List<Book>
+
     @Query("DELETE FROM books WHERE id = :id")
     suspend fun delete(id: String)
 }
 
 @Dao
-interface ChapterDao {
+abstract class ChapterDao {
     @Query("SELECT * FROM chapters WHERE bookId = :bookId ORDER BY startMs")
-    fun observeForBook(bookId: String): Flow<List<Chapter>>
+    abstract fun observeForBook(bookId: String): Flow<List<Chapter>>
 
     @Query("SELECT * FROM chapters WHERE bookId = :bookId ORDER BY startMs")
-    suspend fun getForBook(bookId: String): List<Chapter>
+    abstract suspend fun getForBook(bookId: String): List<Chapter>
+
+    @Query("SELECT * FROM chapters WHERE id = :id")
+    abstract suspend fun get(id: Long): Chapter?
+
+    @Insert
+    abstract suspend fun insertAll(chapters: List<Chapter>)
+
+    @Update
+    abstract suspend fun updateAll(chapters: List<Chapter>)
+
+    @Query("DELETE FROM chapters WHERE id = :id")
+    abstract suspend fun delete(id: Long)
+
+    @Query("DELETE FROM chapters WHERE bookId = :bookId")
+    abstract suspend fun deleteForBook(bookId: String)
+
+    @Transaction
+    open suspend fun replaceForBook(bookId: String, chapters: List<Chapter>) {
+        deleteForBook(bookId)
+        insertAll(chapters)
+    }
 }
 
 @Dao

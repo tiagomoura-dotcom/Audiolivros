@@ -28,6 +28,12 @@ data class Book(
     val addedAt: Long,
     val lastPlayedAt: Long?,
     val finished: Boolean,
+    /** Link de origem, para livros baixados. */
+    val sourceUrl: String? = null,
+    val errorMessage: String? = null,
+    /** Miniatura do vídeo, para "Usar miniatura do vídeo" na folha de capa. */
+    val thumbnailPath: String? = null,
+    val subtitlePath: String? = null,
 )
 
 @Entity(

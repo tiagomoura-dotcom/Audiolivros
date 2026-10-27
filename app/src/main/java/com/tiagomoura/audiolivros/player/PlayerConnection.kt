@@ -122,6 +122,17 @@ class PlayerConnection @Inject constructor(
         }
     }
 
+    /** Carrega o livro, vai até [positionMs] e toca. */
+    fun playFrom(bookId: String, positionMs: Long) {
+        load(bookId, play = false)
+        withController { c ->
+            c.seekTo(positionMs.coerceAtLeast(0))
+            c.play()
+        }
+    }
+
+    fun pause() = withController { it.pause() }
+
     fun seekBack() = withController { it.seekBack() }
 
     fun seekForward() = withController { it.seekForward() }

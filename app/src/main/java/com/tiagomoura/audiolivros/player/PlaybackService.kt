@@ -29,6 +29,7 @@ import com.tiagomoura.audiolivros.MainActivity
 import com.tiagomoura.audiolivros.R
 import com.tiagomoura.audiolivros.core.database.Book
 import com.tiagomoura.audiolivros.core.database.BookDao
+import com.tiagomoura.audiolivros.core.database.ChapterDao
 import com.tiagomoura.audiolivros.core.database.PlaybackState
 import com.tiagomoura.audiolivros.core.database.PlaybackStateDao
 import com.tiagomoura.audiolivros.core.di.ApplicationScope
@@ -38,10 +39,14 @@ import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -58,6 +63,7 @@ class PlaybackService : MediaSessionService() {
 
     @Inject lateinit var bookDao: BookDao
     @Inject lateinit var playbackStateDao: PlaybackStateDao
+    @Inject lateinit var chapterDao: ChapterDao
     @Inject lateinit var settings: SettingsRepository
     @Inject @field:ApplicationScope lateinit var appScope: CoroutineScope
 
@@ -66,6 +72,12 @@ class PlaybackService : MediaSessionService() {
     private var session: MediaSession? = null
     private var periodicSave: Job? = null
     private var rewindOnResumeMs = 0L
+
+    /** Livro atual e seus capítulos, observados do banco. */
+    private val currentBookId = MutableStateFlow<String?>(null)
+    @Volatile private var chapters: List<TimelineChapter> = emptyList()
+    private var lastChapterIndex = -1
+    private var speedAppliedFor: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -97,11 +109,60 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
-        session = MediaSession.Builder(this, player)
+        observeChapters()
+
+        session = MediaSession.Builder(this, ChapterAwarePlayer(player, ::timeline))
             .setCallback(SessionCallback())
             .setSessionActivity(openApp)
             .setMediaButtonPreferences(mediaButtons(playbackSettings.skipIntervalSeconds))
             .build()
+    }
+
+    private fun timeline(): ChapterTimeline =
+        ChapterTimeline(chapters, player.duration.takeIf { it > 0 } ?: 0L)
+
+    @kotlin.OptIn(ExperimentalCoroutinesApi::class)
+    private fun observeChapters() {
+        serviceScope.launch {
+            currentBookId
+                .flatMapLatest { id -> if (id == null) flowOf(emptyList()) else chapterDao.observeForBook(id) }
+                .collect { list ->
+                    chapters = list.map { TimelineChapter(it.title, it.startMs) }
+                    lastChapterIndex = -1
+                    updateSessionMetadata()
+                }
+        }
+    }
+
+    /**
+     * Notificação e tela bloqueada: título do livro e, abaixo, o capítulo atual.
+     * Troca só os metadados do item, sem interromper o áudio.
+     */
+    private fun updateSessionMetadata() {
+        val item = player.currentMediaItem ?: return
+        val author = item.mediaMetadata.extras?.getString(EXTRA_AUTHOR)
+        val chapterTitle = chapters.takeIf { it.isNotEmpty() }?.let { timeline().positionAt(player.currentPosition).title }
+        val subtitle = listOfNotNull(chapterTitle, extraSubtitle()).joinToString(" · ").ifEmpty { author }
+        if (item.mediaMetadata.artist?.toString() == subtitle) return
+        val metadata = item.mediaMetadata.buildUpon()
+            .setArtist(subtitle)
+            .setSubtitle(subtitle)
+            .build()
+        player.replaceMediaItem(player.currentMediaItemIndex, item.buildUpon().setMediaMetadata(metadata).build())
+    }
+
+    /** Texto extra no subtítulo da notificação (o tempo do timer de sono, no marco 6). */
+    private fun extraSubtitle(): String? = null
+
+    /** A cada segundo de reprodução: detecta troca de capítulo e salva a posição a cada 5 s. */
+    private fun onPlaybackTick(tick: Long) {
+        val index = timeline().indexAt(player.currentPosition)
+        if (index != lastChapterIndex) {
+            if (lastChapterIndex >= 0) savePosition()
+            lastChapterIndex = index
+            updateSessionMetadata()
+        }
+        if (tick % (SAVE_INTERVAL_MS / TICK_MS) == 0L) savePosition()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -205,7 +266,7 @@ class PlaybackService : MediaSessionService() {
             .setIsPlayable(true)
             .setIsBrowsable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-            .setExtras(bundleOf(EXTRA_SPEED to speed))
+            .setExtras(bundleOf(EXTRA_SPEED to speed, EXTRA_AUTHOR to book.author))
             .build()
         return MediaItem.Builder()
             .setMediaId(book.id)
@@ -285,9 +346,14 @@ class PlaybackService : MediaSessionService() {
     private inner class PlayerListener : Player.Listener {
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            val speed = mediaItem?.mediaMetadata?.extras?.getFloat(EXTRA_SPEED, 1f) ?: return
-            if (player.playbackParameters.speed != speed) {
-                player.setPlaybackSpeed(speed)
+            val bookId = mediaItem?.mediaId
+            currentBookId.value = bookId
+            // A velocidade salva só é aplicada ao carregar o livro, não quando só os metadados mudam.
+            if (bookId != null && bookId != speedAppliedFor) {
+                speedAppliedFor = bookId
+                lastChapterIndex = -1
+                val speed = mediaItem?.mediaMetadata?.extras?.getFloat(EXTRA_SPEED, 1f) ?: 1f
+                if (player.playbackParameters.speed != speed) player.setPlaybackSpeed(speed)
             }
         }
 
@@ -300,9 +366,10 @@ class PlaybackService : MediaSessionService() {
                     }
                 }
                 periodicSave = serviceScope.launch {
+                    var tick = 0L
                     while (isActive) {
-                        delay(SAVE_INTERVAL_MS)
-                        savePosition()
+                        delay(TICK_MS)
+                        onPlaybackTick(++tick)
                     }
                 }
             } else {
@@ -315,7 +382,10 @@ class PlaybackService : MediaSessionService() {
             newPosition: Player.PositionInfo,
             reason: Int,
         ) {
-            if (reason == Player.DISCONTINUITY_REASON_SEEK) savePosition()
+            if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                savePosition()
+                updateSessionMetadata()
+            }
         }
 
         override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
@@ -332,6 +402,8 @@ class PlaybackService : MediaSessionService() {
         private const val SAVE_INTERVAL_MS = 5_000L
         private const val FINISHED_THRESHOLD_MS = 30_000L
         private const val EXTRA_SPEED = "audiolivros.velocidade"
+        private const val EXTRA_AUTHOR = "audiolivros.autor"
+        private const val TICK_MS = 1_000L
 
         const val ACTION_SEEK_BACK = "audiolivros.VOLTAR"
         const val ACTION_SEEK_FORWARD = "audiolivros.AVANCAR"

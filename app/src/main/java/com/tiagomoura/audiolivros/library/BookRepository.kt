@@ -6,6 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import com.tiagomoura.audiolivros.chapters.ChapterRepository
 import com.tiagomoura.audiolivros.core.database.Book
 import com.tiagomoura.audiolivros.core.database.BookDao
 import com.tiagomoura.audiolivros.core.database.BookStatus
@@ -28,6 +29,7 @@ class BookRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val bookDao: BookDao,
     private val coverStorage: CoverStorage,
+    private val chapterRepository: ChapterRepository,
 ) {
     fun observeLibrary(): Flow<List<BookWithProgress>> = bookDao.observeAllWithProgress()
 
@@ -77,6 +79,7 @@ class BookRepository @Inject constructor(
             finished = false,
         )
         bookDao.insert(book)
+        chapterRepository.autoDetectInBackground(book.id)
         book
     }
 

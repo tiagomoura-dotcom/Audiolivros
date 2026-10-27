@@ -48,7 +48,7 @@
     <string name="status_novo">Novo</string>
     <string name="status_concluido">Concluído</string>
     <string name="status_porcentagem">%1$d%%</string>
-    <string name="status_processando">Processando… %1$d%%</string>
+    <string name="status_processando">Detectando capítulos… %1$d%%</string>
     <string name="status_erro">Erro</string>
     <string name="autor_desconhecido">Autor desconhecido</string>
     <string name="livro_restante">%1$s restantes</string>
@@ -105,5 +105,35 @@
     <string name="origem_subtitle">Detectados pela legenda</string>
     <string name="origem_silence">Detectados pelas pausas</string>
     <string name="origem_manual">Editados manualmente</string>
+    <!-- Editor de capítulos -->
+    <string name="reanalisar">Reanalisar</string>
+    <string name="reanalisar_titulo">Reanalisar capítulos</string>
+    <string name="reanalisar_aviso">Os capítulos atuais serão substituídos pelos encontrados na fonte escolhida.</string>
+    <string name="fonte_metadados">Metadados do arquivo</string>
+    <string name="fonte_metadados_ajuda">Capítulos gravados no MP3 (ID3) ou no M4B/M4A</string>
+    <string name="fonte_descricao">Colar lista da descrição</string>
+    <string name="fonte_descricao_ajuda">Cada linha com um horário vira um capítulo</string>
+    <string name="fonte_legenda">Legenda (.srt ou .vtt)</string>
+    <string name="fonte_legenda_ajuda">Procura as palavras-chave das configurações</string>
+    <string name="fonte_pausas">Pausas (silêncio)</string>
+    <string name="fonte_pausas_ajuda">Analisa o áudio e encontra as pausas longas</string>
+    <string name="cole_descricao">Cole aqui a descrição do vídeo</string>
+    <string name="detectar">Detectar</string>
+    <string name="adicionar_capitulo">Adicionar capítulo</string>
+    <string name="adicionar_em">Adicionar em %1$s</string>
+    <string name="editor_vazio">Este livro ainda não tem capítulos. Reanalise por uma das fontes ou adicione capítulos na posição atual do player.</string>
+    <string name="excluir_capitulo_titulo">Excluir capítulo?</string>
+    <string name="inicio_duracao">Início %1$s · %2$s</string>
+    <string name="menos_um_segundo">−1 s</string>
+    <string name="mais_um_segundo">+1 s</string>
+    <string name="ouvir_antes">Ouvir 5 s antes</string>
+    <string name="ouvir_depois">Ouvir depois</string>
+    <plurals name="capitulos_detectados">
+        <item quantity="one">%d capítulo detectado</item>
+        <item quantity="other">%d capítulos detectados</item>
+    </plurals>
+    <string name="nenhum_capitulo_encontrado">Nenhum capítulo encontrado nessa fonte. Os capítulos atuais foram mantidos.</string>
+    <string name="erro_reanalisar">Não foi possível analisar: %1$s</string>
+    <string name="pausas_em_breve">A detecção por pausas chega na próxima etapa.</string>
     <string name="capa_de">Capa de %1$s</string>
 </resources>

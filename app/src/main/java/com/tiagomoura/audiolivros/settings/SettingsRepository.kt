@@ -4,7 +4,10 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import com.tiagomoura.audiolivros.chapters.SubtitleChapterDetector
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -27,10 +30,28 @@ data class PlaybackSettings(
     }
 }
 
+/** Parâmetros da detecção de capítulos (seção 2.5). */
+data class DetectionSettings(
+    val silenceThresholdDb: Float = DEFAULT_THRESHOLD_DB,
+    val minPauseSeconds: Float = DEFAULT_MIN_PAUSE_S,
+    val minChapterMinutes: Float = DEFAULT_MIN_CHAPTER_MIN,
+    val keywords: List<String> = SubtitleChapterDetector.DEFAULT_KEYWORDS,
+) {
+    companion object {
+        const val DEFAULT_THRESHOLD_DB = -40f
+        const val DEFAULT_MIN_PAUSE_S = 2.0f
+        const val DEFAULT_MIN_CHAPTER_MIN = 3f
+    }
+}
+
 @Singleton
 class SettingsRepository @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
+    private companion object {
+        const val KEYWORD_SEPARATOR = "\n"
+    }
+
     private val skipKey = intPreferencesKey("intervalo_pulo_s")
     private val rewindKey = intPreferencesKey("retroceder_ao_retomar_s")
 
@@ -42,6 +63,32 @@ class SettingsRepository @Inject constructor(
     }
 
     suspend fun currentPlayback(): PlaybackSettings = playback.first()
+
+    private val thresholdKey = floatPreferencesKey("limiar_silencio_db")
+    private val minPauseKey = floatPreferencesKey("pausa_minima_s")
+    private val minChapterKey = floatPreferencesKey("capitulo_minimo_min")
+    private val keywordsKey = stringPreferencesKey("palavras_chave")
+
+    val detection: Flow<DetectionSettings> = context.dataStore.data.map { prefs ->
+        DetectionSettings(
+            silenceThresholdDb = prefs[thresholdKey] ?: DetectionSettings.DEFAULT_THRESHOLD_DB,
+            minPauseSeconds = prefs[minPauseKey] ?: DetectionSettings.DEFAULT_MIN_PAUSE_S,
+            minChapterMinutes = prefs[minChapterKey] ?: DetectionSettings.DEFAULT_MIN_CHAPTER_MIN,
+            keywords = prefs[keywordsKey]?.split(KEYWORD_SEPARATOR)?.map { it.trim() }?.filter { it.isNotEmpty() }
+                ?: SubtitleChapterDetector.DEFAULT_KEYWORDS,
+        )
+    }
+
+    suspend fun currentDetection(): DetectionSettings = detection.first()
+
+    suspend fun setDetection(settings: DetectionSettings) {
+        context.dataStore.edit {
+            it[thresholdKey] = settings.silenceThresholdDb
+            it[minPauseKey] = settings.minPauseSeconds
+            it[minChapterKey] = settings.minChapterMinutes
+            it[keywordsKey] = settings.keywords.joinToString(KEYWORD_SEPARATOR)
+        }
+    }
 
     suspend fun setSkipInterval(seconds: Int) {
         context.dataStore.edit { it[skipKey] = seconds }
