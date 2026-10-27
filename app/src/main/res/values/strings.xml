@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Audiolivros</string>
+
+    <!-- Biblioteca -->
+    <string name="biblioteca_titulo">Biblioteca</string>
+    <plurals name="biblioteca_resumo_livros">
+        <item quantity="one">%d livro</item>
+        <item quantity="other">%d livros</item>
+    </plurals>
+    <plurals name="biblioteca_resumo_processando">
+        <item quantity="one">%d em processamento</item>
+        <item quantity="other">%d em processamento</item>
+    </plurals>
+    <string name="biblioteca_resumo_juncao">%1$s · %2$s</string>
+    <string name="biblioteca_vazia">Nenhum livro ainda. Toque em Importar arquivo para adicionar um audiolivro.</string>
+    <string name="continuar_ouvindo">Continuar ouvindo</string>
+    <string name="todos_os_livros">Todos os livros</string>
+    <string name="importar_arquivo">Importar arquivo</string>
+    <string name="importando">Importando…</string>
+    <string name="importado">\"%1$s\" adicionado à biblioteca</string>
+    <string name="ja_importado">\"%1$s\" já está na biblioteca</string>
+    <plurals name="livro_capitulos">
+        <item quantity="one">%d capítulo</item>
+        <item quantity="other">%d capítulos</item>
+    </plurals>
+    <string name="erro_importar">Não foi possível importar o arquivo: %1$s</string>
+    <string name="erro_desconhecido">erro desconhecido</string>
+    <string name="status_novo">Novo</string>
+    <string name="status_concluido">Concluído</string>
+    <string name="status_porcentagem">%1$d%%</string>
+    <string name="status_processando">Processando… %1$d%%</string>
+    <string name="status_erro">Erro</string>
+    <string name="autor_desconhecido">Autor desconhecido</string>
+    <string name="livro_restante">%1$s restantes</string>
+    <string name="livro_duracao">Duração %1$s</string>
+
+    <!-- Menu do livro -->
+    <string name="renomear">Renomear</string>
+    <string name="editar_autor">Editar autor</string>
+    <string name="excluir">Excluir</string>
+    <string name="titulo">Título</string>
+    <string name="autor">Autor</string>
+    <string name="salvar">Salvar</string>
+    <string name="cancelar">Cancelar</string>
+    <string name="excluir_livro_titulo">Excluir livro?</string>
+    <string name="excluir_livro_texto">\"%1$s\" será removido da biblioteca com a posição salva. O arquivo original no celular não é apagado.</string>
+
+    <!-- Player -->
+    <string name="tocando_agora">Tocando agora</string>
+    <string name="voltar">Voltar</string>
+    <string name="tocar">Tocar</string>
+    <string name="pausar">Pausar</string>
+    <string name="capitulo_anterior">Capítulo anterior</string>
+    <string name="proximo_capitulo">Próximo capítulo</string>
+    <string name="voltar_segundos">Voltar %1$d s</string>
+    <string name="avancar_segundos">Avançar %1$d s</string>
+    <string name="capitulo_de">Cap. %1$d de %2$d</string>
+    <string name="tempo_restante">-%1$s</string>
+    <string name="livro_inteiro">Livro inteiro</string>
+    <string name="velocidade">Velocidade</string>
+    <string name="velocidade_valor">%1$s×</string>
+    <string name="velocidade_ajuste">Ajustar velocidade</string>
+    <string name="ok">OK</string>
+    <string name="livro_nao_encontrado">Livro não encontrado</string>
+    <string name="progresso_livro">%1$d%% do livro · %2$s restantes</string>
+    <string name="capa_de">Capa de %1$s</string>
+</resources>

@@ -1,0 +1,341 @@
+package com.tiagomoura.audiolivros.player
+
+import android.app.PendingIntent
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.util.Log
+import androidx.annotation.OptIn
+import androidx.core.net.toUri
+import androidx.core.os.bundleOf
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.session.CommandButton
+import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
+import com.tiagomoura.audiolivros.MainActivity
+import com.tiagomoura.audiolivros.R
+import com.tiagomoura.audiolivros.core.database.Book
+import com.tiagomoura.audiolivros.core.database.BookDao
+import com.tiagomoura.audiolivros.core.database.PlaybackState
+import com.tiagomoura.audiolivros.core.database.PlaybackStateDao
+import com.tiagomoura.audiolivros.core.di.ApplicationScope
+import com.tiagomoura.audiolivros.settings.SettingsRepository
+import dagger.hilt.android.AndroidEntryPoint
+import java.io.File
+import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.guava.future
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+
+/**
+ * Serviço de reprodução: a única fonte da verdade sobre a posição atual.
+ * As telas enviam só o id do livro; o serviço resolve o arquivo, a posição
+ * salva e a velocidade, e grava a posição conforme a seção 6.4.
+ */
+@OptIn(UnstableApi::class)
+@AndroidEntryPoint
+class PlaybackService : MediaSessionService() {
+
+    @Inject lateinit var bookDao: BookDao
+    @Inject lateinit var playbackStateDao: PlaybackStateDao
+    @Inject lateinit var settings: SettingsRepository
+    @Inject @field:ApplicationScope lateinit var appScope: CoroutineScope
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private lateinit var player: ExoPlayer
+    private var session: MediaSession? = null
+    private var periodicSave: Job? = null
+    private var rewindOnResumeMs = 0L
+
+    override fun onCreate() {
+        super.onCreate()
+        val playbackSettings = runBlocking { settings.currentPlayback() }
+        val skipMs = playbackSettings.skipIntervalSeconds * 1000L
+        rewindOnResumeMs = playbackSettings.rewindOnResumeSeconds * 1000L
+
+        val extractors = DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)
+        player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(this, extractors))
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+                    .build(),
+                /* handleAudioFocus = */ true,
+            )
+            .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(C.WAKE_MODE_LOCAL)
+            .setSeekBackIncrementMs(skipMs)
+            .setSeekForwardIncrementMs(skipMs)
+            .build()
+        player.addListener(PlayerListener())
+
+        val openApp = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        session = MediaSession.Builder(this, player)
+            .setCallback(SessionCallback())
+            .setSessionActivity(openApp)
+            .setMediaButtonPreferences(mediaButtons(playbackSettings.skipIntervalSeconds))
+            .build()
+    }
+
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        savePosition()
+        // Continua tocando se o usuário fechou o app pela multitarefa durante a reprodução.
+        if (!player.playWhenReady || player.mediaItemCount == 0 || player.playbackState == Player.STATE_ENDED) {
+            stopSelf()
+        }
+    }
+
+    override fun onDestroy() {
+        snapshot()?.let { snapshot ->
+            runBlocking(Dispatchers.IO) { persist(snapshot) }
+        }
+        periodicSave?.cancel()
+        session?.release()
+        session = null
+        player.release()
+        serviceScope.cancel()
+        super.onDestroy()
+    }
+
+    private fun mediaButtons(skipSeconds: Int): List<CommandButton> {
+        val backIcon = when (skipSeconds) {
+            10 -> CommandButton.ICON_SKIP_BACK_10
+            15 -> CommandButton.ICON_SKIP_BACK_15
+            30 -> CommandButton.ICON_SKIP_BACK_30
+            else -> CommandButton.ICON_SKIP_BACK
+        }
+        val forwardIcon = when (skipSeconds) {
+            10 -> CommandButton.ICON_SKIP_FORWARD_10
+            15 -> CommandButton.ICON_SKIP_FORWARD_15
+            30 -> CommandButton.ICON_SKIP_FORWARD_30
+            else -> CommandButton.ICON_SKIP_FORWARD
+        }
+        return listOf(
+            CommandButton.Builder(backIcon)
+                .setDisplayName(getString(R.string.voltar_segundos, skipSeconds))
+                .setSessionCommand(COMMAND_SEEK_BACK)
+                .setSlots(CommandButton.SLOT_BACK)
+                .build(),
+            CommandButton.Builder(forwardIcon)
+                .setDisplayName(getString(R.string.avancar_segundos, skipSeconds))
+                .setSessionCommand(COMMAND_SEEK_FORWARD)
+                .setSlots(CommandButton.SLOT_FORWARD)
+                .build(),
+        )
+    }
+
+    /** Estado atual do player, capturado na thread principal. */
+    private data class Snapshot(val bookId: String, val positionMs: Long, val durationMs: Long, val speed: Float)
+
+    private fun snapshot(): Snapshot? {
+        val item = player.currentMediaItem ?: return null
+        if (item.mediaId.isEmpty()) return null
+        return Snapshot(
+            bookId = item.mediaId,
+            positionMs = player.currentPosition.coerceAtLeast(0),
+            durationMs = player.duration,
+            speed = player.playbackParameters.speed,
+        )
+    }
+
+    /** Grava a posição sem bloquear; a gravação continua mesmo se o serviço for encerrado. */
+    private fun savePosition() {
+        val snapshot = snapshot() ?: return
+        appScope.launch(Dispatchers.IO) { persist(snapshot) }
+    }
+
+    private suspend fun persist(snapshot: Snapshot) {
+        try {
+            playbackStateDao.upsert(
+                PlaybackState(
+                    bookId = snapshot.bookId,
+                    positionMs = snapshot.positionMs,
+                    speed = snapshot.speed,
+                    updatedAt = System.currentTimeMillis(),
+                ),
+            )
+            if (snapshot.durationMs > 0) {
+                bookDao.updateDurationIfUnknown(snapshot.bookId, snapshot.durationMs)
+                if (snapshot.positionMs >= snapshot.durationMs - FINISHED_THRESHOLD_MS) {
+                    bookDao.updateFinished(snapshot.bookId, true)
+                }
+            }
+        } catch (e: Exception) {
+            // Livro excluído durante a reprodução, por exemplo. Nunca derrubar o serviço por isso.
+            Log.w(TAG, "Não foi possível salvar a posição de ${snapshot.bookId}", e)
+        }
+    }
+
+    private fun buildMediaItem(book: Book, speed: Float): MediaItem {
+        val artwork: Uri? = book.coverPath?.let { File(it) }?.takeIf { it.exists() }?.let { Uri.fromFile(it) }
+        val metadata = MediaMetadata.Builder()
+            .setTitle(book.title)
+            .setArtist(book.author)
+            .setAlbumTitle(book.title)
+            .setArtworkUri(artwork)
+            .setIsPlayable(true)
+            .setIsBrowsable(false)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+            .setExtras(bundleOf(EXTRA_SPEED to speed))
+            .build()
+        return MediaItem.Builder()
+            .setMediaId(book.id)
+            .setUri(book.audioUri.toUri())
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    private inner class SessionCallback : MediaSession.Callback {
+
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): MediaSession.ConnectionResult {
+            val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                .add(COMMAND_SEEK_BACK)
+                .add(COMMAND_SEEK_FORWARD)
+                .build()
+            val builder = MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(sessionCommands)
+            if (session.isMediaNotificationController(controller)) {
+                // Na notificação e na tela bloqueada, os botões laterais são −30 s e +30 s.
+                val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
+                    .remove(Player.COMMAND_SEEK_TO_PREVIOUS)
+                    .remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                    .remove(Player.COMMAND_SEEK_TO_NEXT)
+                    .remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                    .build()
+                builder.setAvailablePlayerCommands(playerCommands)
+            }
+            return builder.build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            when (customCommand.customAction) {
+                ACTION_SEEK_BACK -> player.seekBack()
+                ACTION_SEEK_FORWARD -> player.seekForward()
+                else -> return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+            }
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
+        override fun onSetMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: MutableList<MediaItem>,
+            startIndex: Int,
+            startPositionMs: Long,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = serviceScope.future {
+            // Antes de trocar de livro, grava a posição do atual.
+            savePosition()
+            val requestedId = mediaItems.getOrNull(startIndex.coerceAtLeast(0))?.mediaId
+                ?: mediaItems.firstOrNull()?.mediaId
+            val book = requestedId?.let { bookDao.get(it) }
+                ?: throw IllegalArgumentException("Livro não encontrado: $requestedId")
+            val saved = playbackStateDao.get(book.id)
+            val start = when {
+                startPositionMs != C.TIME_UNSET -> startPositionMs
+                saved == null -> 0L
+                book.finished && book.durationMs > 0 &&
+                    saved.positionMs >= book.durationMs - FINISHED_THRESHOLD_MS -> 0L
+                else -> (saved.positionMs - rewindOnResumeMs).coerceAtLeast(0)
+            }
+            MediaSession.MediaItemsWithStartPosition(
+                listOf(buildMediaItem(book, saved?.speed ?: 1f)),
+                0,
+                start,
+            )
+        }
+    }
+
+    private inner class PlayerListener : Player.Listener {
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            val speed = mediaItem?.mediaMetadata?.extras?.getFloat(EXTRA_SPEED, 1f) ?: return
+            if (player.playbackParameters.speed != speed) {
+                player.setPlaybackSpeed(speed)
+            }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            periodicSave?.cancel()
+            if (isPlaying) {
+                player.currentMediaItem?.mediaId?.let { bookId ->
+                    appScope.launch(Dispatchers.IO) {
+                        runCatching { bookDao.updateLastPlayed(bookId, System.currentTimeMillis()) }
+                    }
+                }
+                periodicSave = serviceScope.launch {
+                    while (isActive) {
+                        delay(SAVE_INTERVAL_MS)
+                        savePosition()
+                    }
+                }
+            } else {
+                savePosition()
+            }
+        }
+
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK) savePosition()
+        }
+
+        override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+            savePosition()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) savePosition()
+        }
+    }
+
+    companion object {
+        private const val TAG = "PlaybackService"
+        private const val SAVE_INTERVAL_MS = 5_000L
+        private const val FINISHED_THRESHOLD_MS = 30_000L
+        private const val EXTRA_SPEED = "audiolivros.velocidade"
+
+        const val ACTION_SEEK_BACK = "audiolivros.VOLTAR"
+        const val ACTION_SEEK_FORWARD = "audiolivros.AVANCAR"
+        val COMMAND_SEEK_BACK = SessionCommand(ACTION_SEEK_BACK, Bundle.EMPTY)
+        val COMMAND_SEEK_FORWARD = SessionCommand(ACTION_SEEK_FORWARD, Bundle.EMPTY)
+    }
+}

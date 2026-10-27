@@ -1,0 +1,57 @@
+name: Build
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle (com cache)
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Compilar APK de debug e rodar testes
+        run: ./gradlew assembleDebug testDebugUnitTest --stacktrace
+
+      - name: Nomear APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk audiolivros.apk
+
+      - name: Publicar artefato
+        uses: actions/upload-artifact@v7
+        with:
+          name: audiolivros-debug
+          path: audiolivros.apk
+          if-no-files-found: error
+
+      - name: Atualizar a release "ultima-versao"
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f ultima-versao
+          git push -f origin refs/tags/ultima-versao
+          notes="APK de debug compilado do commit ${GITHUB_SHA::7} em $(date -u '+%d/%m/%Y %H:%M') UTC."
+          if gh release view ultima-versao >/dev/null 2>&1; then
+            gh release edit ultima-versao --title "Última versão" --notes "$notes" --latest
+          else
+            gh release create ultima-versao --title "Última versão" --notes "$notes" --latest
+          fi
+          gh release upload ultima-versao audiolivros.apk --clobber

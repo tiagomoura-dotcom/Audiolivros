@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Livro aberto com fones, centralizado na zona segura de 66 dp do ícone adaptativo. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#F2A65A"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M54,46 C48,42 40,41 33,42 L33,68 C40,67 48,68 54,72 C60,68 68,67 75,68 L75,42 C68,41 60,42 54,46 Z M54,46 L54,72" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#EDEBE6"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M36,40 C36,28 44,22 54,22 C64,22 72,28 72,40" />
+</vector>
