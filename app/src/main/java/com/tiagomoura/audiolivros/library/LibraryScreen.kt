@@ -89,6 +89,7 @@ import com.tiagomoura.audiolivros.core.theme.TextoSobreDestaque
 import com.tiagomoura.audiolivros.core.util.formatDuration
 import com.tiagomoura.audiolivros.core.util.formatRemaining
 import com.tiagomoura.audiolivros.covers.BookCover
+import com.tiagomoura.audiolivros.download.DownloadOptions
 import com.tiagomoura.audiolivros.player.rememberNotificationPermissionRequest
 import kotlinx.coroutines.launch
 
@@ -101,6 +102,7 @@ fun LibraryScreen(
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val updatingYtDlp by viewModel.updatingYtDlp.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     val requestNotifications = rememberNotificationPermissionRequest()
@@ -117,6 +119,16 @@ fun LibraryScreen(
                 is LibraryMessage.AlreadyImported -> context.getString(R.string.ja_importado, message.title)
                 is LibraryMessage.ImportFailed -> context.getString(
                     R.string.erro_importar,
+                    message.reason ?: context.getString(R.string.erro_desconhecido),
+                )
+                LibraryMessage.DownloadStarted -> context.getString(R.string.download_iniciado)
+                LibraryMessage.InvalidLink -> context.getString(R.string.link_invalido)
+                is LibraryMessage.YtDlpUpdated -> context.getString(
+                    if (message.alreadyUpToDate) R.string.ytdlp_ja_atualizado else R.string.ytdlp_atualizado,
+                    message.version ?: "?",
+                )
+                is LibraryMessage.YtDlpUpdateFailed -> context.getString(
+                    R.string.ytdlp_erro_atualizar,
                     message.reason ?: context.getString(R.string.erro_desconhecido),
                 )
             }
@@ -203,7 +215,12 @@ fun LibraryScreen(
                     }
                     AnimatedVisibility(visible = linkPanelOpen) {
                         Box(modifier = Modifier.padding(top = 12.dp)) {
-                            LinkPanel(onDownload = { notAvailable(context.getString(R.string.baixar_por_link)) })
+                            LinkPanel(
+                                onDownload = { link, options ->
+                                    viewModel.download(link, options)
+                                    linkPanelOpen = false
+                                },
+                            )
                         }
                     }
                 }
@@ -230,7 +247,16 @@ fun LibraryScreen(
             items(state.books, key = { it.id }) { book ->
                 BookRow(
                     book = book,
-                    onOpen = { onOpenBook(book.id) },
+                    onOpen = {
+                        if (book.isDownloading && book.status != BookStatus.ERROR) {
+                            scope.launch { snackbar.showSnackbar(context.getString(R.string.ainda_baixando)) }
+                        } else if (!book.isDownloading) {
+                            onOpenBook(book.id)
+                        }
+                    },
+                    updatingYtDlp = updatingYtDlp,
+                    onRetry = { viewModel.retryDownload(book.id) },
+                    onUpdateYtDlp = viewModel::updateYtDlp,
                     onRename = { viewModel.rename(book.id, it) },
                     onEditAuthor = { viewModel.updateAuthor(book.id, it) },
                     onDelete = { viewModel.delete(book.id) },
@@ -372,13 +398,16 @@ private fun ContinueListeningCard(
     }
 }
 
-private enum class BookDialog { RENAME, AUTHOR, DELETE }
+private enum class BookDialog { RENAME, AUTHOR, DELETE, DOWNLOAD_ERROR }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BookRow(
     book: LibraryItem,
     onOpen: () -> Unit,
+    updatingYtDlp: Boolean,
+    onRetry: () -> Unit,
+    onUpdateYtDlp: () -> Unit,
     onRename: (String) -> Unit,
     onEditAuthor: (String) -> Unit,
     onDelete: () -> Unit,
@@ -392,7 +421,12 @@ private fun BookRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 72.dp)
-                .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true })
+                .combinedClickable(
+                    onClick = {
+                        if (book.status == BookStatus.ERROR && book.isDownloading) dialog = BookDialog.DOWNLOAD_ERROR else onOpen()
+                    },
+                    onLongClick = { menuOpen = true },
+                )
                 .padding(vertical = 6.dp),
         ) {
             BookCover(
@@ -496,13 +530,41 @@ private fun BookRow(
                 TextButton(onClick = { dialog = null }) { Text(stringResource(R.string.cancelar)) }
             },
         )
+        BookDialog.DOWNLOAD_ERROR -> AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text(stringResource(R.string.falha_download_titulo)) },
+            text = {
+                Column {
+                    Text(book.errorMessage ?: stringResource(R.string.erro_desconhecido))
+                    if (book.suggestsYtDlpUpdate) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(stringResource(R.string.falha_download_sugestao), color = Destaque)
+                    }
+                    if (updatingYtDlp) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(stringResource(R.string.atualizando_ytdlp), color = TextoSecundario)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { onRetry(); dialog = null }) { Text(stringResource(R.string.tentar_de_novo)) }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = onUpdateYtDlp, enabled = !updatingYtDlp) { Text(stringResource(R.string.atualizar_ytdlp)) }
+                    TextButton(onClick = { dialog = null }) { Text(stringResource(R.string.fechar)) }
+                }
+            },
+        )
         null -> Unit
     }
 }
 
 @Composable
 private fun statusText(book: LibraryItem): String = when {
+    book.status == BookStatus.PROCESSING && book.isDownloading -> stringResource(R.string.status_baixando, book.processingProgress)
     book.status == BookStatus.PROCESSING -> stringResource(R.string.status_processando, book.processingProgress)
+    book.status == BookStatus.ERROR && book.isDownloading -> stringResource(R.string.status_falha_download)
     book.status == BookStatus.ERROR -> stringResource(R.string.status_erro)
     book.finished -> stringResource(R.string.status_concluido)
     !book.started -> stringResource(R.string.status_novo)
@@ -535,7 +597,7 @@ private fun TextInputDialog(
 }
 
 @Composable
-private fun LinkPanel(onDownload: () -> Unit) {
+private fun LinkPanel(onDownload: (String, DownloadOptions) -> Unit) {
     var link by rememberSaveable { mutableStateOf("") }
     var chaptersAndSubtitles by rememberSaveable { mutableStateOf(true) }
     var convertToMp3 by rememberSaveable { mutableStateOf(true) }
@@ -557,7 +619,10 @@ private fun LinkPanel(onDownload: () -> Unit) {
             OptionRow(stringResource(R.string.opcao_miniatura_capa), thumbnailAsCover) { thumbnailAsCover = it }
             Spacer(Modifier.height(8.dp))
             Button(
-                onClick = onDownload,
+                onClick = {
+                    onDownload(link, DownloadOptions(chaptersAndSubtitles, convertToMp3, thumbnailAsCover))
+                    link = ""
+                },
                 enabled = link.isNotBlank(),
                 shape = Raios.Botao,
                 modifier = Modifier

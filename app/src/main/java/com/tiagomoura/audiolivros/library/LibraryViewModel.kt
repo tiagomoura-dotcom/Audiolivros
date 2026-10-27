@@ -6,6 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.tiagomoura.audiolivros.core.database.BookStatus
 import com.tiagomoura.audiolivros.core.database.ChapterSource
 import com.tiagomoura.audiolivros.core.database.BookWithProgress
+import com.tiagomoura.audiolivros.download.DownloadErrors
+import com.tiagomoura.audiolivros.download.DownloadOptions
+import com.tiagomoura.audiolivros.download.DownloadRepository
+import com.tiagomoura.audiolivros.download.YtDlp
 import com.tiagomoura.audiolivros.player.PlayerConnection
 import com.tiagomoura.audiolivros.player.PlayerUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -35,7 +39,12 @@ data class LibraryItem(
     val positionMs: Long,
     val durationMs: Long,
     val lastPlayedAt: Long?,
+    /** Livro baixado por link cujo áudio ainda não chegou. */
+    val isDownloading: Boolean = false,
+    val errorMessage: String? = null,
 ) {
+    val suggestsYtDlpUpdate: Boolean get() = DownloadErrors.suggestsUpdate(errorMessage)
+
     val progress: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
     val remainingMs: Long get() = (durationMs - positionMs).coerceAtLeast(0)
 }
@@ -54,13 +63,21 @@ sealed interface LibraryMessage {
     data class Imported(val title: String) : LibraryMessage
     data class AlreadyImported(val title: String) : LibraryMessage
     data class ImportFailed(val reason: String?) : LibraryMessage
+    data object DownloadStarted : LibraryMessage
+    data object InvalidLink : LibraryMessage
+    data class YtDlpUpdated(val version: String?, val alreadyUpToDate: Boolean) : LibraryMessage
+    data class YtDlpUpdateFailed(val reason: String?) : LibraryMessage
 }
 
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     private val repository: BookRepository,
     private val player: PlayerConnection,
+    private val downloads: DownloadRepository,
+    private val ytDlp: YtDlp,
 ) : ViewModel() {
+
+    val updatingYtDlp = MutableStateFlow(false)
 
     private val importing = MutableStateFlow(false)
     private val messages = Channel<LibraryMessage>(Channel.BUFFERED)
@@ -94,6 +111,38 @@ class LibraryViewModel @Inject constructor(
                 LibraryMessage.ImportFailed(e.localizedMessage)
             } finally {
                 importing.value = false
+            }
+            messages.send(message)
+        }
+    }
+
+    fun download(url: String, options: DownloadOptions) {
+        val link = url.trim()
+        viewModelScope.launch {
+            if (!link.startsWith("http://") && !link.startsWith("https://")) {
+                messages.send(LibraryMessage.InvalidLink)
+                return@launch
+            }
+            downloads.start(link, options)
+            messages.send(LibraryMessage.DownloadStarted)
+        }
+    }
+
+    fun retryDownload(bookId: String) {
+        viewModelScope.launch { downloads.retry(bookId) }
+    }
+
+    fun updateYtDlp() {
+        if (updatingYtDlp.value) return
+        viewModelScope.launch {
+            updatingYtDlp.value = true
+            val message = try {
+                val result = ytDlp.update()
+                LibraryMessage.YtDlpUpdated(result.version, result.alreadyUpToDate)
+            } catch (e: Exception) {
+                LibraryMessage.YtDlpUpdateFailed(e.localizedMessage)
+            } finally {
+                updatingYtDlp.value = false
             }
             messages.send(message)
         }
@@ -134,6 +183,8 @@ class LibraryViewModel @Inject constructor(
             positionMs = position,
             durationMs = duration,
             lastPlayedAt = book.lastPlayedAt,
+            isDownloading = book.audioUri.isEmpty() && book.sourceUrl != null,
+            errorMessage = book.errorMessage,
         )
     }
 }

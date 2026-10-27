@@ -33,6 +33,9 @@ interface BookDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(book: Book)
 
+    @Update
+    suspend fun update(book: Book)
+
     @Query("UPDATE books SET title = :title WHERE id = :id")
     suspend fun updateTitle(id: String, title: String)
 

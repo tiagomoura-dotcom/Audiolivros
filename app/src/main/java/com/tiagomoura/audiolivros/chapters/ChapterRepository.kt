@@ -48,17 +48,26 @@ class ChapterRepository @Inject constructor(
         }
     }
 
-    private suspend fun autoDetect(bookId: String) {
+    /**
+     * Fontes em ordem de prioridade (seção 5): metadados embutidos, capítulos do
+     * info.json, legenda baixada e, se nada der resultado, pausas.
+     */
+    suspend fun autoDetect(bookId: String, infoJsonChapters: List<ParsedChapter> = emptyList()) {
         val book = bookDao.get(bookId) ?: return
         bookDao.updateStatus(bookId, BookStatus.PROCESSING, 0)
         val embedded = readEmbedded(book)
-        if (embedded.isNotEmpty()) {
+        if (embedded.size > 1) {
             save(book, embedded, ChapterSource.EMBEDDED)
             bookDao.updateStatus(bookId, BookStatus.READY, 100)
             return
         }
+        if (infoJsonChapters.size > 1) {
+            save(book, infoJsonChapters, ChapterSource.INFO_JSON)
+            bookDao.updateStatus(bookId, BookStatus.READY, 100)
+            return
+        }
         val fromSubtitle = book.subtitlePath?.let { path -> detectInSubtitle(File(path).readLines()) }.orEmpty()
-        if (fromSubtitle.isNotEmpty()) {
+        if (fromSubtitle.size > 1) {
             save(book, fromSubtitle, ChapterSource.SUBTITLE)
             bookDao.updateStatus(bookId, BookStatus.READY, 100)
             return

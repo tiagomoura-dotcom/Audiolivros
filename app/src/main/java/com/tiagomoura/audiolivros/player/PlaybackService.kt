@@ -419,6 +419,7 @@ class PlaybackService : MediaSessionService() {
                 ?: mediaItems.firstOrNull()?.mediaId
             val book = requestedId?.let { bookDao.get(it) }
                 ?: throw IllegalArgumentException("Livro não encontrado: $requestedId")
+            check(book.audioUri.isNotEmpty()) { "O áudio de ${book.id} ainda não foi baixado" }
             val saved = playbackStateDao.get(book.id)
             val start = when {
                 startPositionMs != C.TIME_UNSET -> startPositionMs

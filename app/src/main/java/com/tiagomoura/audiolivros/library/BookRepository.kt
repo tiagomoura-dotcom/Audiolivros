@@ -14,6 +14,7 @@ import com.tiagomoura.audiolivros.core.database.BookDao
 import com.tiagomoura.audiolivros.core.database.BookStatus
 import com.tiagomoura.audiolivros.core.database.BookWithProgress
 import com.tiagomoura.audiolivros.covers.CoverStorage
+import com.tiagomoura.audiolivros.download.DownloadRepository
 import com.tiagomoura.audiolivros.covers.PlaceholderCover
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -34,6 +35,7 @@ class BookRepository @Inject constructor(
     private val chapterRepository: ChapterRepository,
     private val envelopes: EnvelopeStore,
     private val analysis: ChapterAnalysisScheduler,
+    private val downloads: DownloadRepository,
 ) {
     fun observeLibrary(): Flow<List<BookWithProgress>> = bookDao.observeAllWithProgress()
 
@@ -95,6 +97,7 @@ class BookRepository @Inject constructor(
     suspend fun delete(id: String) = withContext(Dispatchers.IO) {
         val book = bookDao.get(id) ?: return@withContext
         analysis.cancel(id)
+        downloads.cancel(id)
         bookDao.delete(id)
         coverStorage.delete(id)
         envelopes.delete(id)

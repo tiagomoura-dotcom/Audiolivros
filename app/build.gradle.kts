@@ -51,6 +51,13 @@ android {
     buildFeatures {
         compose = true
     }
+
+    packaging {
+        jniLibs {
+            // O youtubedl-android executa o Python e o ffmpeg extraídos das bibliotecas nativas.
+            useLegacyPackaging = true
+        }
+    }
 }
 
 ksp {
@@ -88,6 +95,10 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
     implementation(libs.androidx.work.runtime.ktx)
+
+    implementation(libs.youtubedl.library)
+    implementation(libs.youtubedl.ffmpeg)
+    implementation(libs.kotlinx.serialization.json)
 
     implementation(libs.coil.compose)
     implementation(libs.kotlinx.coroutines.android)

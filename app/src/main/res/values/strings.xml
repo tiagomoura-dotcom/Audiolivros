@@ -160,5 +160,23 @@
     <string name="limiar_silencio_ajuda">Mais alto encontra mais pausas</string>
     <string name="pausa_minima">Pausa mínima: %1$s s</string>
     <string name="capitulo_minimo">Duração mínima do capítulo: %1$d min</string>
+    <!-- Download por link -->
+    <string name="etapa_baixando">Baixando</string>
+    <string name="etapa_convertendo">Convertendo</string>
+    <string name="erro_audio_nao_encontrado">O yt-dlp terminou, mas nenhum arquivo de áudio foi encontrado.</string>
+    <string name="status_baixando">Baixando… %1$d%%</string>
+    <string name="status_falha_download">Falha no download</string>
+    <string name="download_iniciado">Download iniciado. Acompanhe na biblioteca e na notificação.</string>
+    <string name="link_invalido">Cole um link que comece com http:// ou https://</string>
+    <string name="ainda_baixando">Este livro ainda está sendo baixado.</string>
+    <string name="falha_download_titulo">Falha no download</string>
+    <string name="falha_download_sugestao">Esse erro costuma acontecer quando o yt-dlp está desatualizado. Atualize e tente de novo.</string>
+    <string name="tentar_de_novo">Tentar de novo</string>
+    <string name="atualizar_ytdlp">Atualizar yt-dlp</string>
+    <string name="fechar">Fechar</string>
+    <string name="ytdlp_atualizado">yt-dlp atualizado para a versão %1$s</string>
+    <string name="ytdlp_ja_atualizado">O yt-dlp já está na versão mais recente (%1$s)</string>
+    <string name="ytdlp_erro_atualizar">Não foi possível atualizar o yt-dlp: %1$s</string>
+    <string name="atualizando_ytdlp">Atualizando o yt-dlp…</string>
     <string name="capa_de">Capa de %1$s</string>
 </resources>
