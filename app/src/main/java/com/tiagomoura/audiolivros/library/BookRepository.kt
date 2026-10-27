@@ -6,7 +6,9 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import com.tiagomoura.audiolivros.chapters.ChapterAnalysisScheduler
 import com.tiagomoura.audiolivros.chapters.ChapterRepository
+import com.tiagomoura.audiolivros.chapters.EnvelopeStore
 import com.tiagomoura.audiolivros.core.database.Book
 import com.tiagomoura.audiolivros.core.database.BookDao
 import com.tiagomoura.audiolivros.core.database.BookStatus
@@ -30,6 +32,8 @@ class BookRepository @Inject constructor(
     private val bookDao: BookDao,
     private val coverStorage: CoverStorage,
     private val chapterRepository: ChapterRepository,
+    private val envelopes: EnvelopeStore,
+    private val analysis: ChapterAnalysisScheduler,
 ) {
     fun observeLibrary(): Flow<List<BookWithProgress>> = bookDao.observeAllWithProgress()
 
@@ -90,8 +94,10 @@ class BookRepository @Inject constructor(
     /** Remove o livro, a capa e a cópia local. O arquivo original do usuário não é apagado. */
     suspend fun delete(id: String) = withContext(Dispatchers.IO) {
         val book = bookDao.get(id) ?: return@withContext
+        analysis.cancel(id)
         bookDao.delete(id)
         coverStorage.delete(id)
+        envelopes.delete(id)
         if (book.isCopied) {
             File(context.filesDir, "books/$id").deleteRecursively()
         } else {

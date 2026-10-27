@@ -1,7 +1,6 @@
 package com.tiagomoura.audiolivros
 
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -15,6 +14,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.tiagomoura.audiolivros.chapters.ChapterEditorScreen
 import com.tiagomoura.audiolivros.chapters.ChapterEditorViewModel
+import com.tiagomoura.audiolivros.chapters.SilenceScreen
+import com.tiagomoura.audiolivros.chapters.SilenceViewModel
 import com.tiagomoura.audiolivros.core.theme.AudiolivrosTheme
 import com.tiagomoura.audiolivros.core.theme.Fundo
 import com.tiagomoura.audiolivros.library.LibraryScreen
@@ -28,7 +29,11 @@ private const val ROUTE_PLAYER = "player/{${PlayerViewModel.ARG_BOOK_ID}}"
 private const val ROUTE_CHAPTERS =
     "capitulos/{${ChapterEditorViewModel.ARG_BOOK_ID}}?${ChapterEditorViewModel.ARG_REANALYZE}={${ChapterEditorViewModel.ARG_REANALYZE}}"
 
+private const val ROUTE_SILENCE = "pausas/{${SilenceViewModel.ARG_BOOK_ID}}"
+
 private fun playerRoute(bookId: String) = "player/$bookId"
+
+private fun silenceRoute(bookId: String) = "pausas/$bookId"
 
 private fun chaptersRoute(bookId: String, reanalyze: Boolean) =
     "capitulos/$bookId?${ChapterEditorViewModel.ARG_REANALYZE}=$reanalyze"
@@ -69,10 +74,14 @@ class MainActivity : ComponentActivity() {
                     ) {
                         ChapterEditorScreen(
                             onBack = { navController.popBackStack() },
-                            onSilenceAnalysis = {
-                                Toast.makeText(this@MainActivity, R.string.pausas_em_breve, Toast.LENGTH_SHORT).show()
-                            },
+                            onSilenceAnalysis = { bookId -> navController.navigate(silenceRoute(bookId)) },
                         )
+                    }
+                    composable(
+                        route = ROUTE_SILENCE,
+                        arguments = listOf(navArgument(SilenceViewModel.ARG_BOOK_ID) { type = NavType.StringType }),
+                    ) {
+                        SilenceScreen(onBack = { navController.popBackStack() })
                     }
                 }
             }

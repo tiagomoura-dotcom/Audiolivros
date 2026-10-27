@@ -134,7 +134,6 @@
     </plurals>
     <string name="nenhum_capitulo_encontrado">Nenhum capítulo encontrado nessa fonte. Os capítulos atuais foram mantidos.</string>
     <string name="erro_reanalisar">Não foi possível analisar: %1$s</string>
-    <string name="pausas_em_breve">A detecção por pausas chega na próxima etapa.</string>
     <!-- Marcações -->
     <string name="concluir">Concluir</string>
     <string name="marcando_trecho_desde">Marcando trecho desde %1$s — toque em Concluir</string>
@@ -148,5 +147,18 @@
     <string name="marcacao_trecho">%1$s – %2$s · trecho</string>
     <string name="marcacao_ponto">%1$s · ponto</string>
     <string name="marcado_pela_notificacao">Marcado pela notificação</string>
+    <!-- Detecção por pausas -->
+    <string name="canal_tarefas">Tarefas em andamento</string>
+    <string name="canal_tarefas_descricao">Downloads e análise de capítulos</string>
+    <string name="etapa_detectando">Detectando capítulos</string>
+    <string name="analisando_audio">Analisando o áudio… %1$d%%</string>
+    <string name="analise_segundo_plano">A análise continua em segundo plano, mesmo com a tela desligada.</string>
+    <string name="pausas_explicacao">O áudio é lido em blocos para encontrar as pausas longas. Livros grandes podem levar alguns minutos. Depois, você ajusta a sensibilidade sem precisar analisar de novo.</string>
+    <string name="analisar_audio">Analisar áudio</string>
+    <string name="aplicar_capitulos">Usar estes capítulos</string>
+    <string name="limiar_silencio">Limiar de silêncio: %1$d dBFS</string>
+    <string name="limiar_silencio_ajuda">Mais alto encontra mais pausas</string>
+    <string name="pausa_minima">Pausa mínima: %1$s s</string>
+    <string name="capitulo_minimo">Duração mínima do capítulo: %1$d min</string>
     <string name="capa_de">Capa de %1$s</string>
 </resources>

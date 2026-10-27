@@ -31,6 +31,7 @@ class ChapterRepository @Inject constructor(
     private val bookDao: BookDao,
     private val chapterDao: ChapterDao,
     private val settings: SettingsRepository,
+    private val analysis: ChapterAnalysisScheduler,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
     fun observe(bookId: String): Flow<List<Chapter>> = chapterDao.observeForBook(bookId)
@@ -53,11 +54,17 @@ class ChapterRepository @Inject constructor(
         val embedded = readEmbedded(book)
         if (embedded.isNotEmpty()) {
             save(book, embedded, ChapterSource.EMBEDDED)
-        } else {
-            val fromSubtitle = book.subtitlePath?.let { path -> detectInSubtitle(File(path).readLines()) }.orEmpty()
-            if (fromSubtitle.isNotEmpty()) save(book, fromSubtitle, ChapterSource.SUBTITLE)
+            bookDao.updateStatus(bookId, BookStatus.READY, 100)
+            return
         }
-        bookDao.updateStatus(bookId, BookStatus.READY, 100)
+        val fromSubtitle = book.subtitlePath?.let { path -> detectInSubtitle(File(path).readLines()) }.orEmpty()
+        if (fromSubtitle.isNotEmpty()) {
+            save(book, fromSubtitle, ChapterSource.SUBTITLE)
+            bookDao.updateStatus(bookId, BookStatus.READY, 100)
+            return
+        }
+        // Nenhuma fonte pronta: análise por pausas em segundo plano (o worker atualiza o status).
+        analysis.analyze(bookId, applyChapters = true)
     }
 
     /** Reanalisa pelos metadados embutidos. Retorna quantos capítulos encontrou. */
