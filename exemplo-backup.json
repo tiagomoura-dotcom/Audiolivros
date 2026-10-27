@@ -1,0 +1,45 @@
+{
+  "format": "audiolivros-backup",
+  "version": 1,
+  "exportedAt": "2026-10-26T07:40:00-03:00",
+  "books": [
+    {
+      "id": "5f1c2a9e-3b7d-4e21-9a0c-6d8e4f2b1a77",
+      "title": "Dom Casmurro",
+      "author": "Machado de Assis",
+      "fingerprint": {
+        "fileName": "Dom Casmurro.mp3",
+        "fileSizeBytes": 412345678,
+        "durationMs": 24612000
+      },
+      "playback": {
+        "positionMs": 9341000,
+        "speed": 1.25,
+        "updatedAt": "2026-10-25T23:41:12-03:00",
+        "finished": false
+      },
+      "chapterSource": "DESCRIPTION",
+      "chapters": [
+        { "index": 0, "title": "Do título", "startMs": 0, "source": "DESCRIPTION" },
+        { "index": 1, "title": "Do livro", "startMs": 250000, "source": "DESCRIPTION" },
+        { "index": 2, "title": "A denúncia", "startMs": 645000, "source": "DESCRIPTION" }
+      ],
+      "bookmarks": [
+        {
+          "type": "range",
+          "startMs": 717000,
+          "endMs": 805000,
+          "note": "Conversa de José Dias com D. Glória",
+          "createdAt": "2026-10-20T22:10:00-03:00"
+        },
+        {
+          "type": "point",
+          "startMs": 9205000,
+          "endMs": null,
+          "note": "Marcado pela notificação",
+          "createdAt": "2026-10-25T23:30:41-03:00"
+        }
+      ]
+    }
+  ]
+}
