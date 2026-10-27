@@ -92,6 +92,7 @@ import com.tiagomoura.audiolivros.core.util.formatDuration
 import com.tiagomoura.audiolivros.core.util.formatRemaining
 import com.tiagomoura.audiolivros.covers.BookCover
 import com.tiagomoura.audiolivros.download.DownloadOptions
+import com.tiagomoura.audiolivros.download.DownloadWorker
 import com.tiagomoura.audiolivros.player.rememberNotificationPermissionRequest
 import kotlinx.coroutines.launch
 
@@ -582,7 +583,7 @@ private fun BookRow(
 
 @Composable
 private fun statusText(book: LibraryItem): String = when {
-    book.status == BookStatus.PROCESSING && book.isDownloading -> stringResource(R.string.status_baixando, book.processingProgress)
+    book.status == BookStatus.PROCESSING && book.isDownloading -> downloadStatus(book.processingProgress)
     book.status == BookStatus.PROCESSING -> stringResource(R.string.status_processando, book.processingProgress)
     book.status == BookStatus.ERROR && book.isDownloading -> stringResource(R.string.status_falha_download)
     book.missingFile -> stringResource(R.string.status_arquivo_ausente)
@@ -713,4 +714,16 @@ private fun BackupCard(lastBackupAt: Long?, onExport: () -> Unit) {
             }
         }
     }
+}
+
+/** O progresso do download é dividido em etapas: 0–79 baixando, 80–94 convertendo, 95+ capítulos. */
+@Composable
+private fun downloadStatus(progress: Int): String = when {
+    progress < DownloadWorker.CONVERT_START ->
+        stringResource(R.string.status_baixando, progress * 100 / DownloadWorker.CONVERT_START)
+    progress < DownloadWorker.CHAPTERS_START -> stringResource(
+        R.string.status_convertendo,
+        (progress - DownloadWorker.CONVERT_START) * 100 / (DownloadWorker.CHAPTERS_START - DownloadWorker.CONVERT_START),
+    )
+    else -> stringResource(R.string.status_processando, progress)
 }

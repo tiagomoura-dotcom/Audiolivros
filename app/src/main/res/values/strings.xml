@@ -165,6 +165,7 @@
     <string name="etapa_convertendo">Convertendo</string>
     <string name="erro_audio_nao_encontrado">O yt-dlp terminou, mas nenhum arquivo de áudio foi encontrado.</string>
     <string name="status_baixando">Baixando… %1$d%%</string>
+    <string name="status_convertendo">Convertendo para MP3… %1$d%%</string>
     <string name="status_falha_download">Falha no download</string>
     <string name="download_iniciado">Download iniciado. Acompanhe na biblioteca e na notificação.</string>
     <string name="link_invalido">Cole um link que comece com http:// ou https://</string>

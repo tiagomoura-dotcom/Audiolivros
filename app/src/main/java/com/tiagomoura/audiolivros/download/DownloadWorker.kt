@@ -24,6 +24,7 @@ import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -86,6 +87,8 @@ class DownloadWorker @AssistedInject constructor(
                     }
                 }
 
+                val conversion = launch { monitorConversion(dir, options, progress) }
+
                 ytDlp.awaitReady()
                 dir.mkdirs()
                 dir.listFiles()?.filter { it.name != DownloadRepository.OPTIONS_FILE }?.forEach { it.deleteRecursively() }
@@ -110,9 +113,10 @@ class DownloadWorker @AssistedInject constructor(
                     }
                 }
 
+                conversion.cancel()
                 val result = collectResult(dir, options)
                 notificationTitle = result.title
-                progress.value = Progress(Step.CHAPTERS, 95)
+                progress.value = Progress(Step.CHAPTERS, CHAPTERS_START)
                 bookDao.update(
                     book.copy(
                         title = result.title,
@@ -166,11 +170,36 @@ class DownloadWorker @AssistedInject constructor(
                 progress.value.step
             }
             val overall = when (step) {
-                Step.DOWNLOADING -> (percent.coerceIn(0f, 100f) * 0.85f).toInt()
-                Step.CONVERTING -> 90
-                Step.CHAPTERS -> 95
+                Step.DOWNLOADING -> (percent.coerceIn(0f, 100f) * DOWNLOAD_SHARE).toInt()
+                // O progresso da conversão vem do monitor do arquivo (monitorConversion).
+                Step.CONVERTING -> CONVERT_START
+                Step.CHAPTERS -> CHAPTERS_START
             }
             progress.value = Progress(step, maxOf(overall, progress.value.percent))
+        }
+    }
+
+    /**
+     * O yt-dlp não informa o progresso da conversão para MP3, que num audiolivro longo
+     * leva minutos. Estima pelo tamanho do MP3 sendo gravado em relação à duração do
+     * vídeo (lida do info.json) a cerca de 128 kbps.
+     */
+    private suspend fun monitorConversion(dir: File, options: DownloadOptions, progress: MutableStateFlow<Progress>) {
+        if (!options.convertToMp3) return
+        var durationSeconds: Double? = null
+        while (true) {
+            delay(1_000)
+            if (progress.value.step != Step.CONVERTING) continue
+            if (durationSeconds == null) {
+                durationSeconds = dir.listFiles()?.firstOrNull { it.name.endsWith(".info.json") }
+                    ?.let { runCatching { InfoJson.parse(it.readText()).durationMs }.getOrNull() }
+                    ?.div(1000.0)
+            }
+            val seconds = durationSeconds ?: continue
+            val mp3 = dir.listFiles()?.filter { it.extension.lowercase() == "mp3" }?.maxByOrNull { it.length() } ?: continue
+            val fraction = (mp3.length() / (seconds * MP3_BYTES_PER_SECOND)).coerceIn(0.0, 0.99)
+            val overall = CONVERT_START + (fraction * (CHAPTERS_START - CONVERT_START)).toInt()
+            if (overall > progress.value.percent) progress.value = Progress(Step.CONVERTING, overall)
         }
     }
 
@@ -232,6 +261,10 @@ class DownloadWorker @AssistedInject constructor(
     companion object {
         private const val TAG = "DownloadWorker"
         private const val NOTIFICATION_ID_BASE = 30_000
+        private const val DOWNLOAD_SHARE = 0.80f
+        const val CONVERT_START = 80
+        const val CHAPTERS_START = 95
+        private const val MP3_BYTES_PER_SECOND = 128_000 / 8.0
         const val KEY_BOOK_ID = "livro"
         private val AUDIO_EXTENSIONS = setOf("mp3", "m4a", "m4b", "aac", "opus", "ogg", "oga", "webm", "flac", "wav", "mka")
         private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
