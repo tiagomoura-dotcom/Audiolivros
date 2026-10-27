@@ -5,7 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tiagomoura.audiolivros.core.database.Book
 import com.tiagomoura.audiolivros.core.database.BookDao
+import android.net.Uri
+import com.tiagomoura.audiolivros.backup.BackupRepository
 import com.tiagomoura.audiolivros.bookmarks.BookmarkRepository
+import com.tiagomoura.audiolivros.covers.CoverRepository
 import com.tiagomoura.audiolivros.core.database.Bookmark
 import com.tiagomoura.audiolivros.core.database.ChapterDao
 import com.tiagomoura.audiolivros.core.database.ChapterSource
@@ -22,6 +25,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+sealed interface PlayerMessage {
+    data object CoverFailed : PlayerMessage
+    data object Exported : PlayerMessage
+    data class ExportFailed(val reason: String?) : PlayerMessage
+}
 
 /** Marcação como mostrada no player, com o capítulo correspondente. */
 data class BookmarkItem(
@@ -54,6 +63,8 @@ data class PlayerScreenState(
     val rangeStartMs: Long = 0,
     val rangeEndMs: Long = 0,
     val rangeRepeat: Boolean = false,
+    val timerRemainingMs: Long? = null,
+    val timerEndOfChapter: Boolean = false,
     val chapterSource: ChapterSource? = null,
     val skipSeconds: Int = PlaybackSettings.DEFAULT_SKIP_SECONDS,
 ) {
@@ -80,9 +91,17 @@ class PlayerViewModel @Inject constructor(
     bookDao: BookDao,
     chapterDao: ChapterDao,
     private val bookmarkRepository: BookmarkRepository,
-    settings: SettingsRepository,
+    private val settings: SettingsRepository,
     private val player: PlayerConnection,
+    private val covers: CoverRepository,
+    private val backup: BackupRepository,
 ) : ViewModel() {
+
+    private val messages = Channel<PlayerMessage>(Channel.BUFFERED)
+    val messageFlow = messages.receiveAsFlow()
+
+    val batteryCardDismissed: StateFlow<Boolean> = settings.batteryCardDismissed
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
     val bookId: String = checkNotNull(savedStateHandle.get<String>(ARG_BOOK_ID)) { "bookId ausente" }
 
@@ -131,6 +150,8 @@ class PlayerViewModel @Inject constructor(
             rangeStartMs = playerState.rangeStartMs,
             rangeEndMs = playerState.rangeEndMs,
             rangeRepeat = playerState.rangeRepeat,
+            timerRemainingMs = playerState.timerRemainingMs.takeIf { isCurrent },
+            timerEndOfChapter = playerState.timerEndOfChapter,
             chapterSource = book.chapterSource,
             skipSeconds = skipSeconds,
         )
@@ -173,6 +194,48 @@ class PlayerViewModel @Inject constructor(
     fun cycleSpeed() = player.setSpeed(PlaybackSpeed.next(state.value.speed))
 
     fun setSpeed(speed: Float) = player.setSpeed(PlaybackSpeed.normalize(speed))
+
+    // ---------- Capa (seção 8) ----------
+
+    fun cameraUri(): Uri = covers.cameraUri()
+
+    fun setCoverFromUri(uri: Uri) = coverAction { covers.setFromUri(bookId, uri) }
+
+    fun setCoverFromCamera() = coverAction { covers.setFromCamera(bookId) }
+
+    fun setCoverFromThumbnail() = coverAction { covers.setFromThumbnail(bookId) }
+
+    fun removeCover() {
+        viewModelScope.launch { covers.remove(bookId) }
+    }
+
+    private fun coverAction(block: suspend () -> Boolean) {
+        viewModelScope.launch {
+            val ok = runCatching { block() }.getOrDefault(false)
+            if (!ok) messages.send(PlayerMessage.CoverFailed)
+        }
+    }
+
+    // ---------- Exportar e bateria ----------
+
+    fun exportBook(uri: Uri) {
+        viewModelScope.launch {
+            val result = runCatching { backup.exportTo(uri, bookId) }
+            messages.send(if (result.isSuccess) PlayerMessage.Exported else PlayerMessage.ExportFailed(result.exceptionOrNull()?.localizedMessage))
+        }
+    }
+
+    fun dismissBatteryCard() {
+        viewModelScope.launch { settings.setBatteryCardDismissed(true) }
+    }
+
+    // ---------- Timer de sono (seção 6.3) ----------
+
+    fun setTimer(minutes: Int) = player.setTimer(minutes, endOfChapter = false)
+
+    fun setTimerEndOfChapter() = player.setTimer(0, endOfChapter = true)
+
+    fun cancelTimer() = player.cancelTimer()
 
     // ---------- Marcações (seção 7) ----------
 

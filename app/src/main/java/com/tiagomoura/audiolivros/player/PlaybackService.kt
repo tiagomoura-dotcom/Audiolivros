@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.core.net.toUri
@@ -27,6 +28,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.tiagomoura.audiolivros.MainActivity
 import com.tiagomoura.audiolivros.R
+import com.tiagomoura.audiolivros.backup.PositionFileWriter
 import com.tiagomoura.audiolivros.core.database.Book
 import com.tiagomoura.audiolivros.core.database.BookDao
 import com.tiagomoura.audiolivros.core.database.Bookmark
@@ -48,7 +50,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -67,6 +71,7 @@ class PlaybackService : MediaSessionService() {
     @Inject lateinit var playbackStateDao: PlaybackStateDao
     @Inject lateinit var chapterDao: ChapterDao
     @Inject lateinit var bookmarkDao: BookmarkDao
+    @Inject lateinit var positionFiles: PositionFileWriter
     @Inject lateinit var settings: SettingsRepository
     @Inject @field:ApplicationScope lateinit var appScope: CoroutineScope
 
@@ -74,7 +79,15 @@ class PlaybackService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private var session: MediaSession? = null
     private var periodicSave: Job? = null
-    private var rewindOnResumeMs = 0L
+    @Volatile private var rewindOnResumeMs = 0L
+    @Volatile private var skipMs = 30_000L
+
+    /** Timer de sono (seção 6.3): tempo restante de reprodução, ou até o fim do capítulo. */
+    private var timerRemainingMs: Long? = null
+    private var timerEndOfChapter = false
+    private var timerTargetEndMs = 0L
+    private var timerJob: Job? = null
+    private var timerLabel: String? = null
 
     /** Livro atual e seus capítulos, observados do banco. */
     private val currentBookId = MutableStateFlow<String?>(null)
@@ -91,7 +104,7 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         val playbackSettings = runBlocking { settings.currentPlayback() }
-        val skipMs = playbackSettings.skipIntervalSeconds * 1000L
+        skipMs = playbackSettings.skipIntervalSeconds * 1000L
         rewindOnResumeMs = playbackSettings.rewindOnResumeSeconds * 1000L
 
         val extractors = DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)
@@ -119,6 +132,7 @@ class PlaybackService : MediaSessionService() {
         )
 
         observeChapters()
+        observeSettings()
 
         session = MediaSession.Builder(this, ChapterAwarePlayer(player, ::timeline))
             .setCallback(SessionCallback())
@@ -141,6 +155,14 @@ class PlaybackService : MediaSessionService() {
                     updateSessionMetadata()
                 }
         }
+        // Capa trocada durante a reprodução: atualiza a notificação e a tela bloqueada.
+        serviceScope.launch {
+            currentBookId
+                .flatMapLatest { id -> if (id == null) flowOf(null) else bookDao.observe(id) }
+                .map { it?.coverPath to it?.coverPath?.let { path -> File(path).lastModified() } }
+                .distinctUntilChanged()
+                .collect { (coverPath, _) -> updateArtwork(coverPath) }
+        }
     }
 
     /**
@@ -160,8 +182,96 @@ class PlaybackService : MediaSessionService() {
         player.replaceMediaItem(player.currentMediaItemIndex, item.buildUpon().setMediaMetadata(metadata).build())
     }
 
-    /** Texto extra no subtítulo da notificação (o tempo do timer de sono, no marco 6). */
-    private fun extraSubtitle(): String? = null
+    private fun updateArtwork(coverPath: String?) {
+        val item = player.currentMediaItem ?: return
+        val artwork = coverPath?.let { File(it) }?.takeIf { it.exists() }
+            ?.let { Uri.fromFile(it).buildUpon().appendQueryParameter("v", it.lastModified().toString()).build() }
+        if (item.mediaMetadata.artworkUri == artwork) return
+        val metadata = item.mediaMetadata.buildUpon().setArtworkUri(artwork).build()
+        player.replaceMediaItem(player.currentMediaItemIndex, item.buildUpon().setMediaMetadata(metadata).build())
+    }
+
+    /** Texto extra no subtítulo da notificação: o tempo restante do timer de sono. */
+    private fun extraSubtitle(): String? = timerLabel
+
+    /** Intervalo de pulo e retrocesso ao retomar mudam sem reiniciar o serviço. */
+    private fun observeSettings() {
+        serviceScope.launch {
+            var lastSkip = -1
+            settings.playback.collect { value ->
+                skipMs = value.skipIntervalSeconds * 1000L
+                rewindOnResumeMs = value.rewindOnResumeSeconds * 1000L
+                if (value.skipIntervalSeconds != lastSkip) {
+                    lastSkip = value.skipIntervalSeconds
+                    session?.setMediaButtonPreferences(mediaButtons(value.skipIntervalSeconds))
+                }
+            }
+        }
+    }
+
+    private fun seekBy(deltaMs: Long) {
+        val duration = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+        player.seekTo((player.currentPosition + deltaMs).coerceIn(0, duration))
+    }
+
+    private fun startTimer(minutes: Int, endOfChapter: Boolean) {
+        timerJob?.cancel()
+        timerEndOfChapter = endOfChapter
+        timerTargetEndMs = if (endOfChapter) timeline().positionAt(player.currentPosition).endMs else 0L
+        timerRemainingMs = if (endOfChapter) remainingInChapter() else minutes * 60_000L
+        timerJob = serviceScope.launch {
+            var last = SystemClock.elapsedRealtime()
+            while (isActive) {
+                delay(TIMER_TICK_MS)
+                val now = SystemClock.elapsedRealtime()
+                val remaining = if (timerEndOfChapter) {
+                    remainingInChapter()
+                } else {
+                    val current = timerRemainingMs ?: break
+                    if (player.isPlaying) current - (now - last) else current
+                }
+                last = now
+                timerRemainingMs = remaining
+                // Nos últimos 10 s, o volume abaixa aos poucos até pausar.
+                player.volume = (remaining.toFloat() / FADE_MS).coerceIn(0f, 1f)
+                if (remaining <= 0) {
+                    player.pause()
+                    cancelTimer()
+                    break
+                }
+                refreshTimerLabel()
+            }
+        }
+        refreshTimerLabel()
+    }
+
+    private fun remainingInChapter(): Long {
+        val speed = player.playbackParameters.speed.takeIf { it > 0 } ?: 1f
+        return ((timerTargetEndMs - player.currentPosition) / speed).toLong().coerceAtLeast(0)
+    }
+
+    private fun cancelTimer() {
+        timerJob?.cancel()
+        timerJob = null
+        timerRemainingMs = null
+        timerEndOfChapter = false
+        player.volume = 1f
+        refreshTimerLabel()
+    }
+
+    private fun refreshTimerLabel() {
+        val remaining = timerRemainingMs
+        val label = when {
+            remaining == null -> null
+            remaining >= 60_000 -> getString(R.string.timer_notificacao_min, ((remaining + 59_999) / 60_000).toInt())
+            else -> getString(R.string.timer_notificacao_s, ((remaining + 999) / 1000).toInt())
+        }
+        publishState()
+        if (label != timerLabel) {
+            timerLabel = label
+            updateSessionMetadata()
+        }
+    }
 
     /** A cada segundo de reprodução: detecta troca de capítulo e salva a posição a cada 5 s. */
     private fun onPlaybackTick(tick: Long) {
@@ -287,12 +397,21 @@ class PlaybackService : MediaSessionService() {
                 EXTRA_RANGE_START to (current?.startMs ?: 0L),
                 EXTRA_RANGE_END to (current?.endMs ?: 0L),
                 EXTRA_RANGE_REPEAT to (current?.repeat ?: false),
+                EXTRA_TIMER_ACTIVE to (timerRemainingMs != null),
+                EXTRA_TIMER_REMAINING_MS to (timerRemainingMs ?: 0L),
+                EXTRA_TIMER_END_OF_CHAPTER to timerEndOfChapter,
             ),
         )
     }
 
     /** Estado atual do player, capturado na thread principal. */
-    private data class Snapshot(val bookId: String, val positionMs: Long, val durationMs: Long, val speed: Float)
+    private data class Snapshot(
+        val bookId: String,
+        val positionMs: Long,
+        val durationMs: Long,
+        val speed: Float,
+        val playing: Boolean,
+    )
 
     private fun snapshot(): Snapshot? {
         val item = player.currentMediaItem ?: return null
@@ -302,6 +421,7 @@ class PlaybackService : MediaSessionService() {
             positionMs = player.currentPosition.coerceAtLeast(0),
             durationMs = player.duration,
             speed = player.playbackParameters.speed,
+            playing = player.isPlaying,
         )
     }
 
@@ -327,6 +447,8 @@ class PlaybackService : MediaSessionService() {
                     bookDao.updateFinished(snapshot.bookId, true)
                 }
             }
+            // Arquivo de posição automático: ao pausar e no máximo uma vez por minuto tocando.
+            positionFiles.write(snapshot.bookId, force = !snapshot.playing)
         } catch (e: Exception) {
             // Livro excluído durante a reprodução, por exemplo. Nunca derrubar o serviço por isso.
             Log.w(TAG, "Não foi possível salvar a posição de ${snapshot.bookId}", e)
@@ -334,7 +456,9 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun buildMediaItem(book: Book, speed: Float): MediaItem {
-        val artwork: Uri? = book.coverPath?.let { File(it) }?.takeIf { it.exists() }?.let { Uri.fromFile(it) }
+        // O "?v=" muda quando a capa é trocada, para a notificação não mostrar a antiga do cache.
+        val artwork: Uri? = book.coverPath?.let { File(it) }?.takeIf { it.exists() }
+            ?.let { Uri.fromFile(it).buildUpon().appendQueryParameter("v", it.lastModified().toString()).build() }
         val metadata = MediaMetadata.Builder()
             .setTitle(book.title)
             .setArtist(book.author)
@@ -365,6 +489,8 @@ class PlaybackService : MediaSessionService() {
                 .add(COMMAND_PLAY_RANGE)
                 .add(COMMAND_STOP_RANGE)
                 .add(COMMAND_SET_RANGE_REPEAT)
+                .add(COMMAND_SET_TIMER)
+                .add(COMMAND_CANCEL_TIMER)
                 .build()
             val builder = MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
@@ -388,8 +514,10 @@ class PlaybackService : MediaSessionService() {
             args: Bundle,
         ): ListenableFuture<SessionResult> {
             when (customCommand.customAction) {
-                ACTION_SEEK_BACK -> player.seekBack()
-                ACTION_SEEK_FORWARD -> player.seekForward()
+                ACTION_SEEK_BACK -> seekBy(-skipMs)
+                ACTION_SEEK_FORWARD -> seekBy(skipMs)
+                ACTION_SET_TIMER -> startTimer(args.getInt(ARG_MINUTES), args.getBoolean(ARG_END_OF_CHAPTER))
+                ACTION_CANCEL_TIMER -> cancelTimer()
                 ACTION_ADD_BOOKMARK -> addBookmarkFromNotification()
                 ACTION_PLAY_RANGE -> playRange(
                     args.getLong(ARG_START_MS),
@@ -523,5 +651,17 @@ class PlaybackService : MediaSessionService() {
         const val EXTRA_RANGE_END = "trecho.fim"
         const val EXTRA_RANGE_REPEAT = "trecho.repetir"
         private const val RANGE_CHECK_MS = 100L
+
+        const val ACTION_SET_TIMER = "audiolivros.TIMER"
+        const val ACTION_CANCEL_TIMER = "audiolivros.CANCELAR_TIMER"
+        val COMMAND_SET_TIMER = SessionCommand(ACTION_SET_TIMER, Bundle.EMPTY)
+        val COMMAND_CANCEL_TIMER = SessionCommand(ACTION_CANCEL_TIMER, Bundle.EMPTY)
+        const val ARG_MINUTES = "minutos"
+        const val ARG_END_OF_CHAPTER = "fim_do_capitulo"
+        const val EXTRA_TIMER_ACTIVE = "timer.ativo"
+        const val EXTRA_TIMER_REMAINING_MS = "timer.restante"
+        const val EXTRA_TIMER_END_OF_CHAPTER = "timer.fim_do_capitulo"
+        private const val TIMER_TICK_MS = 250L
+        private const val FADE_MS = 10_000f
     }
 }

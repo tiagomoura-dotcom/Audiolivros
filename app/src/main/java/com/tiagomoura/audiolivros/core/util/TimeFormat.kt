@@ -25,3 +25,21 @@ fun formatRemaining(ms: Long): String {
         else -> "$totalSeconds s"
     }
 }
+
+/** "hoje, 07:40", "ontem, 22:10" ou "25/10, 22:10" para o último backup. */
+fun formatBackupDate(
+    epochMs: Long,
+    todayLabel: String,
+    yesterdayLabel: String,
+    now: Long = System.currentTimeMillis(),
+): String {
+    val zone = java.time.ZoneId.systemDefault()
+    val date = java.time.Instant.ofEpochMilli(epochMs).atZone(zone)
+    val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+    val time = "%02d:%02d".format(date.hour, date.minute)
+    return when (date.toLocalDate()) {
+        today -> "$todayLabel, $time"
+        today.minusDays(1) -> "$yesterdayLabel, $time"
+        else -> "%02d/%02d, %s".format(date.dayOfMonth, date.monthValue, time)
+    }
+}

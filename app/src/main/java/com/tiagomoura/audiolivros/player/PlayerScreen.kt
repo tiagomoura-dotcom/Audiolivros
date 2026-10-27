@@ -48,6 +48,9 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -103,6 +106,17 @@ import com.tiagomoura.audiolivros.core.theme.TextoSobreDestaque
 import com.tiagomoura.audiolivros.core.util.formatDuration
 import com.tiagomoura.audiolivros.core.util.formatRemaining
 import com.tiagomoura.audiolivros.covers.BookCover
+import com.tiagomoura.audiolivros.backup.positionFileName
+import com.tiagomoura.audiolivros.core.database.Book
+import com.tiagomoura.audiolivros.settings.BatteryCard
+import com.tiagomoura.audiolivros.settings.rememberIgnoringBatteryOptimizations
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.OndemandVideo
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -127,6 +141,27 @@ fun PlayerScreen(
 
     LaunchedEffect(viewModel) {
         viewModel.noteRequestFlow.collect { id -> noteDialog = NoteDialog(id, "") }
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.messageFlow.collect { message ->
+            val text = when (message) {
+                PlayerMessage.CoverFailed -> context.getString(R.string.capa_falhou)
+                PlayerMessage.Exported -> context.getString(R.string.livro_exportado)
+                is PlayerMessage.ExportFailed -> context.getString(
+                    R.string.erro_generico,
+                    message.reason ?: context.getString(R.string.erro_desconhecido),
+                )
+            }
+            snackbar.showSnackbar(text)
+        }
+    }
+    var coverSheet by remember { mutableStateOf(false) }
+    var timerDialog by remember { mutableStateOf(false) }
+    var detailsDialog by remember { mutableStateOf(false) }
+    val batteryDismissed by viewModel.batteryCardDismissed.collectAsStateWithLifecycle()
+    val ignoringBattery = rememberIgnoringBatteryOptimizations()
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) viewModel.exportBook(uri)
     }
 
     Scaffold(
@@ -159,6 +194,9 @@ fun PlayerScreen(
                                         when (item) {
                                             R.string.editar_capitulos -> onEditChapters(false)
                                             R.string.reanalisar_capitulos -> onEditChapters(true)
+                                            R.string.exportar_este_livro ->
+                                                state.book?.let { exportLauncher.launch(positionFileName(it.title)) }
+                                            R.string.detalhes_do_arquivo -> detailsDialog = true
                                             else -> notAvailable(item)
                                         }
                                     },
@@ -207,7 +245,7 @@ fun PlayerScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 FilledIconButton(
-                    onClick = { notAvailable(R.string.foto_de_capa) },
+                    onClick = { coverSheet = true },
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = Superficie2, contentColor = Texto),
                     modifier = Modifier
@@ -280,8 +318,14 @@ fun PlayerScreen(
                     onSetSpeed = viewModel::setSpeed,
                     modifier = Modifier.weight(1f),
                 )
-                ActionButton(Icons.Outlined.Timer, stringResource(R.string.timer), Modifier.weight(1f)) {
-                    notAvailable(R.string.timer)
+                ActionButton(
+                    icon = Icons.Outlined.Timer,
+                    label = state.timerRemainingMs?.let { formatDuration(it) } ?: stringResource(R.string.timer),
+                    modifier = Modifier.weight(1f),
+                    enabled = state.isCurrent,
+                    highlighted = state.timerRemainingMs != null,
+                ) {
+                    timerDialog = true
                 }
                 ActionButton(Icons.Outlined.BookmarkAdd, stringResource(R.string.marcar), Modifier.weight(1f), state.isCurrent) {
                     viewModel.markPoint()
@@ -296,6 +340,11 @@ fun PlayerScreen(
                 ) {
                     viewModel.toggleRange()
                 }
+            }
+
+            if (state.isPlaying && !ignoringBattery && !batteryDismissed) {
+                Spacer(Modifier.height(16.dp))
+                BatteryCard(ignoring = false, onDismiss = viewModel::dismissBatteryCard)
             }
 
             Spacer(Modifier.height(16.dp))
@@ -319,6 +368,40 @@ fun PlayerScreen(
                 onEditNote = { noteDialog = NoteDialog(it.id, it.note.orEmpty()) },
                 onDeleteBookmark = { viewModel.deleteBookmark(it.id) },
             )
+        }
+    }
+
+    if (coverSheet) {
+        CoverSheet(
+            hasThumbnail = state.book?.thumbnailPath?.let { java.io.File(it).exists() } == true,
+            hasCover = state.book?.coverPath != null,
+            cameraUri = viewModel::cameraUri,
+            onGallery = viewModel::setCoverFromUri,
+            onCamera = viewModel::setCoverFromCamera,
+            onThumbnail = viewModel::setCoverFromThumbnail,
+            onRemove = viewModel::removeCover,
+            onDismiss = { coverSheet = false },
+        )
+    }
+
+    if (timerDialog) {
+        TimerDialog(
+            active = state.timerRemainingMs != null,
+            onSelect = { minutes ->
+                if (minutes == null) viewModel.setTimerEndOfChapter() else viewModel.setTimer(minutes)
+                timerDialog = false
+            },
+            onCancelTimer = {
+                viewModel.cancelTimer()
+                timerDialog = false
+            },
+            onDismiss = { timerDialog = false },
+        )
+    }
+
+    if (detailsDialog) {
+        state.book?.let { book ->
+            FileDetailsDialog(book = book, chapterCount = state.chapters.size, onDismiss = { detailsDialog = false })
         }
     }
 
@@ -814,4 +897,141 @@ private fun BookmarkMarks(state: PlayerScreenState, modifier: Modifier = Modifie
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CoverSheet(
+    hasThumbnail: Boolean,
+    hasCover: Boolean,
+    cameraUri: () -> android.net.Uri,
+    onGallery: (android.net.Uri) -> Unit,
+    onCamera: () -> Unit,
+    onThumbnail: () -> Unit,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val gallery = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) onGallery(uri)
+        onDismiss()
+    }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+        if (saved) onCamera()
+        onDismiss()
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Superficie) {
+        Text(
+            text = stringResource(R.string.foto_de_capa),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        )
+        SheetOption(Icons.Outlined.PhotoLibrary, stringResource(R.string.escolher_da_galeria)) {
+            gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
+        SheetOption(Icons.Outlined.PhotoCamera, stringResource(R.string.tirar_foto)) {
+            camera.launch(cameraUri())
+        }
+        if (hasThumbnail) {
+            SheetOption(Icons.Outlined.OndemandVideo, stringResource(R.string.usar_miniatura)) {
+                onThumbnail()
+                onDismiss()
+            }
+        }
+        if (hasCover) {
+            SheetOption(Icons.Outlined.Delete, stringResource(R.string.remover_capa)) {
+                onRemove()
+                onDismiss()
+            }
+        }
+        Text(
+            text = stringResource(R.string.capa_ajuda),
+            style = MaterialTheme.typography.bodySmall,
+            color = TextoSecundario,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+        )
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun SheetOption(icon: ImageVector, label: String, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(label) },
+        leadingContent = { Icon(icon, contentDescription = null, tint = Destaque) },
+        colors = ListItemDefaults.colors(containerColor = Superficie),
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp),
+    )
+}
+
+/** Timer de sono: 15, 30, 45 e 60 min e "Fim do capítulo" (nulo). */
+@Composable
+private fun TimerDialog(active: Boolean, onSelect: (Int?) -> Unit, onCancelTimer: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.timer_de_sono)) },
+        text = {
+            Column {
+                listOf(15, 30, 45, 60).forEach { minutes ->
+                    TimerOption(stringResource(R.string.minutos, minutes)) { onSelect(minutes) }
+                }
+                TimerOption(stringResource(R.string.fim_do_capitulo)) { onSelect(null) }
+            }
+        },
+        confirmButton = {
+            if (active) TextButton(onClick = onCancelTimer) { Text(stringResource(R.string.desligar_timer)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancelar)) } },
+    )
+}
+
+@Composable
+private fun TimerOption(label: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+    )
+}
+
+@Composable
+private fun FileDetailsDialog(book: Book, chapterCount: Int, onDismiss: () -> Unit) {
+    val origin = when {
+        book.sourceUrl != null -> book.sourceUrl
+        book.isCopied -> stringResource(R.string.origem_copia)
+        else -> stringResource(R.string.origem_aparelho)
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.detalhes_do_arquivo)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                DetailLine(stringResource(R.string.detalhe_arquivo), book.fileName.ifEmpty { "—" })
+                DetailLine(stringResource(R.string.detalhe_tamanho), formatSize(book.fileSizeBytes))
+                DetailLine(stringResource(R.string.detalhe_duracao), formatDuration(book.durationMs))
+                DetailLine(stringResource(R.string.aba_capitulos), chapterCount.toString())
+                DetailLine(stringResource(R.string.detalhe_origem), origin)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.fechar)) } },
+    )
+}
+
+@Composable
+private fun DetailLine(label: String, value: String) {
+    Column {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = TextoSecundario)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+private fun formatSize(bytes: Long): String = when {
+    bytes <= 0 -> "—"
+    bytes >= 1L shl 30 -> "%.1f GB".format(bytes / (1L shl 30).toDouble()).replace('.', ',')
+    else -> "%.1f MB".format(bytes / (1L shl 20).toDouble()).replace('.', ',')
 }

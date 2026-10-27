@@ -3,9 +3,11 @@ package com.tiagomoura.audiolivros.settings
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.tiagomoura.audiolivros.chapters.SubtitleChapterDetector
 import androidx.datastore.preferences.preferencesDataStore
@@ -80,6 +82,31 @@ class SettingsRepository @Inject constructor(
     }
 
     suspend fun currentDetection(): DetectionSettings = detection.first()
+
+    private val lastBackupKey = longPreferencesKey("ultimo_backup")
+    private val positionFolderKey = stringPreferencesKey("pasta_arquivo_posicao")
+    private val batteryCardDismissedKey = booleanPreferencesKey("cartao_bateria_dispensado")
+
+    val lastBackupAt: Flow<Long?> = context.dataStore.data.map { it[lastBackupKey] }
+
+    suspend fun setLastBackupAt(timestamp: Long) {
+        context.dataStore.edit { it[lastBackupKey] = timestamp }
+    }
+
+    /** Pasta escolhida para o arquivo de posição automático (nula = desligado). */
+    val positionFolder: Flow<String?> = context.dataStore.data.map { it[positionFolderKey] }
+
+    suspend fun currentPositionFolder(): String? = positionFolder.first()
+
+    suspend fun setPositionFolder(uri: String?) {
+        context.dataStore.edit { if (uri == null) it.remove(positionFolderKey) else it[positionFolderKey] = uri }
+    }
+
+    val batteryCardDismissed: Flow<Boolean> = context.dataStore.data.map { it[batteryCardDismissedKey] ?: false }
+
+    suspend fun setBatteryCardDismissed(dismissed: Boolean) {
+        context.dataStore.edit { it[batteryCardDismissedKey] = dismissed }
+    }
 
     suspend fun setDetection(settings: DetectionSettings) {
         context.dataStore.edit {

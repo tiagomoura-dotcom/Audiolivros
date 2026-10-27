@@ -75,7 +75,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tiagomoura.audiolivros.R
+import com.tiagomoura.audiolivros.backup.BackupRepository
 import com.tiagomoura.audiolivros.chapters.shortLabel
+import com.tiagomoura.audiolivros.core.util.formatBackupDate
 import com.tiagomoura.audiolivros.core.database.BookStatus
 import com.tiagomoura.audiolivros.core.theme.Borda
 import com.tiagomoura.audiolivros.core.theme.Destaque
@@ -99,6 +101,7 @@ private val AUDIO_MIME_TYPES = arrayOf("audio/*")
 @Composable
 fun LibraryScreen(
     onOpenBook: (String) -> Unit,
+    onOpenSettings: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -108,9 +111,6 @@ fun LibraryScreen(
     val requestNotifications = rememberNotificationPermissionRequest()
     val scope = rememberCoroutineScope()
     var linkPanelOpen by rememberSaveable { mutableStateOf(false) }
-    val notAvailable: (String) -> Unit = { feature ->
-        scope.launch { snackbar.showSnackbar(context.getString(R.string.ainda_nao_disponivel, feature)) }
-    }
 
     LaunchedEffect(viewModel) {
         viewModel.messageFlow.collect { message ->
@@ -122,6 +122,11 @@ fun LibraryScreen(
                     message.reason ?: context.getString(R.string.erro_desconhecido),
                 )
                 LibraryMessage.DownloadStarted -> context.getString(R.string.download_iniciado)
+                LibraryMessage.Exported -> context.getString(R.string.backup_exportado)
+                is LibraryMessage.Failed -> context.getString(
+                    R.string.erro_generico,
+                    message.reason ?: context.getString(R.string.erro_desconhecido),
+                )
                 LibraryMessage.InvalidLink -> context.getString(R.string.link_invalido)
                 is LibraryMessage.YtDlpUpdated -> context.getString(
                     if (message.alreadyUpToDate) R.string.ytdlp_ja_atualizado else R.string.ytdlp_atualizado,
@@ -139,6 +144,15 @@ fun LibraryScreen(
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) viewModel.import(uri)
     }
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) viewModel.exportBackup(uri)
+    }
+    var relinkBookId by rememberSaveable { mutableStateOf<String?>(null) }
+    val relinkLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val bookId = relinkBookId
+        if (uri != null && bookId != null) viewModel.relink(bookId, uri)
+        relinkBookId = null
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -155,7 +169,7 @@ fun LibraryScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item(key = "cabecalho") {
-                Header(state, onSettings = { notAvailable(context.getString(R.string.configuracoes)) })
+                Header(state, onSettings = onOpenSettings)
             }
 
             state.continueListening?.let { book ->
@@ -250,6 +264,9 @@ fun LibraryScreen(
                     onOpen = {
                         if (book.isDownloading && book.status != BookStatus.ERROR) {
                             scope.launch { snackbar.showSnackbar(context.getString(R.string.ainda_baixando)) }
+                        } else if (book.missingFile) {
+                            relinkBookId = book.id
+                            relinkLauncher.launch(AUDIO_MIME_TYPES)
                         } else if (!book.isDownloading) {
                             onOpenBook(book.id)
                         }
@@ -264,7 +281,10 @@ fun LibraryScreen(
             }
 
             item(key = "backup") {
-                BackupCard(onExport = { notAvailable(context.getString(R.string.exportar)) })
+                BackupCard(
+                    lastBackupAt = state.lastBackupAt,
+                    onExport = { exportLauncher.launch(BackupRepository.backupFileName()) },
+                )
             }
         }
     }
@@ -565,6 +585,7 @@ private fun statusText(book: LibraryItem): String = when {
     book.status == BookStatus.PROCESSING && book.isDownloading -> stringResource(R.string.status_baixando, book.processingProgress)
     book.status == BookStatus.PROCESSING -> stringResource(R.string.status_processando, book.processingProgress)
     book.status == BookStatus.ERROR && book.isDownloading -> stringResource(R.string.status_falha_download)
+    book.missingFile -> stringResource(R.string.status_arquivo_ausente)
     book.status == BookStatus.ERROR -> stringResource(R.string.status_erro)
     book.finished -> stringResource(R.string.status_concluido)
     !book.started -> stringResource(R.string.status_novo)
@@ -655,7 +676,7 @@ private fun OptionRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 }
 
 @Composable
-private fun BackupCard(onExport: () -> Unit) {
+private fun BackupCard(lastBackupAt: Long?, onExport: () -> Unit) {
     Surface(
         color = Superficie,
         contentColor = Texto,
@@ -668,7 +689,12 @@ private fun BackupCard(onExport: () -> Unit) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = stringResource(R.string.posicoes_e_marcacoes), style = MaterialTheme.typography.titleMedium)
                 Text(
-                    text = stringResource(R.string.salvas_no_aparelho),
+                    text = lastBackupAt?.let {
+                        stringResource(
+                            R.string.salvas_no_aparelho_backup,
+                            formatBackupDate(it, stringResource(R.string.hoje), stringResource(R.string.ontem)),
+                        )
+                    } ?: stringResource(R.string.salvas_no_aparelho),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextoSecundario,
                 )

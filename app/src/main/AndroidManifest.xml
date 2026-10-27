@@ -39,6 +39,16 @@
             </intent-filter>
         </service>
 
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.arquivos"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- WorkManager com HiltWorkerFactory: inicializado pelo Application, não pelo androidx.startup. -->
         <provider
             android:name="androidx.startup.InitializationProvider"

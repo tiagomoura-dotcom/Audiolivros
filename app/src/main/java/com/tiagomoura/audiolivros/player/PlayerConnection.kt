@@ -40,6 +40,9 @@ data class PlayerUiState(
     val rangeStartMs: Long = 0,
     val rangeEndMs: Long = 0,
     val rangeRepeat: Boolean = false,
+    /** Timer de sono: tempo restante, ou nulo se desligado. */
+    val timerRemainingMs: Long? = null,
+    val timerEndOfChapter: Boolean = false,
 )
 
 /**
@@ -109,6 +112,9 @@ class PlayerConnection @Inject constructor(
             rangeStartMs = extras.getLong(PlaybackService.EXTRA_RANGE_START),
             rangeEndMs = extras.getLong(PlaybackService.EXTRA_RANGE_END),
             rangeRepeat = extras.getBoolean(PlaybackService.EXTRA_RANGE_REPEAT),
+            timerRemainingMs = extras.getLong(PlaybackService.EXTRA_TIMER_REMAINING_MS)
+                .takeIf { extras.getBoolean(PlaybackService.EXTRA_TIMER_ACTIVE) },
+            timerEndOfChapter = extras.getBoolean(PlaybackService.EXTRA_TIMER_END_OF_CHAPTER),
         )
     }
 
@@ -167,9 +173,19 @@ class PlayerConnection @Inject constructor(
 
     fun stopRange() = withController { it.sendCustomCommand(PlaybackService.COMMAND_STOP_RANGE, Bundle.EMPTY) }
 
-    fun seekBack() = withController { it.seekBack() }
+    /** Voltar e avançar usam o intervalo das configurações, aplicado pelo serviço. */
+    fun seekBack() = withController { it.sendCustomCommand(PlaybackService.COMMAND_SEEK_BACK, Bundle.EMPTY) }
 
-    fun seekForward() = withController { it.seekForward() }
+    fun seekForward() = withController { it.sendCustomCommand(PlaybackService.COMMAND_SEEK_FORWARD, Bundle.EMPTY) }
+
+    fun setTimer(minutes: Int, endOfChapter: Boolean) = withController {
+        it.sendCustomCommand(
+            PlaybackService.COMMAND_SET_TIMER,
+            bundleOf(PlaybackService.ARG_MINUTES to minutes, PlaybackService.ARG_END_OF_CHAPTER to endOfChapter),
+        )
+    }
+
+    fun cancelTimer() = withController { it.sendCustomCommand(PlaybackService.COMMAND_CANCEL_TIMER, Bundle.EMPTY) }
 
     fun seekTo(positionMs: Long) = withController { it.seekTo(positionMs.coerceAtLeast(0)) }
 

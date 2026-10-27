@@ -39,6 +39,9 @@ interface BookDao {
     @Query("UPDATE books SET title = :title WHERE id = :id")
     suspend fun updateTitle(id: String, title: String)
 
+    @Query("UPDATE books SET coverPath = :coverPath WHERE id = :id")
+    suspend fun updateCover(id: String, coverPath: String?)
+
     @Query("UPDATE books SET author = :author WHERE id = :id")
     suspend fun updateAuthor(id: String, author: String?)
 
@@ -125,6 +128,9 @@ interface BookmarkDao {
 interface PlaybackStateDao {
     @Query("SELECT * FROM playback_states WHERE bookId = :bookId")
     suspend fun get(bookId: String): PlaybackState?
+
+    @Query("SELECT * FROM playback_states")
+    suspend fun getAll(): List<PlaybackState>
 
     @Upsert
     suspend fun upsert(state: PlaybackState)

@@ -3,7 +3,9 @@ package com.tiagomoura.audiolivros.library
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.tiagomoura.audiolivros.backup.BackupRepository
 import com.tiagomoura.audiolivros.core.database.BookStatus
+import com.tiagomoura.audiolivros.settings.SettingsRepository
 import com.tiagomoura.audiolivros.core.database.ChapterSource
 import com.tiagomoura.audiolivros.core.database.BookWithProgress
 import com.tiagomoura.audiolivros.download.DownloadErrors
@@ -44,6 +46,8 @@ data class LibraryItem(
     val errorMessage: String? = null,
 ) {
     val suggestsYtDlpUpdate: Boolean get() = DownloadErrors.suggestsUpdate(errorMessage)
+    /** Veio de um backup sem arquivo correspondente: o usuário precisa apontar o arquivo. */
+    val missingFile: Boolean get() = errorMessage == BackupRepository.MISSING_FILE
 
     val progress: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
     val remainingMs: Long get() = (durationMs - positionMs).coerceAtLeast(0)
@@ -55,6 +59,7 @@ data class LibraryUiState(
     val continueListening: LibraryItem? = null,
     val continueIsPlaying: Boolean = false,
     val importing: Boolean = false,
+    val lastBackupAt: Long? = null,
 ) {
     val processingCount: Int get() = books.count { it.status == BookStatus.PROCESSING }
 }
@@ -67,6 +72,8 @@ sealed interface LibraryMessage {
     data object InvalidLink : LibraryMessage
     data class YtDlpUpdated(val version: String?, val alreadyUpToDate: Boolean) : LibraryMessage
     data class YtDlpUpdateFailed(val reason: String?) : LibraryMessage
+    data object Exported : LibraryMessage
+    data class Failed(val reason: String?) : LibraryMessage
 }
 
 @HiltViewModel
@@ -75,6 +82,8 @@ class LibraryViewModel @Inject constructor(
     private val player: PlayerConnection,
     private val downloads: DownloadRepository,
     private val ytDlp: YtDlp,
+    private val backup: BackupRepository,
+    settings: SettingsRepository,
 ) : ViewModel() {
 
     val updatingYtDlp = MutableStateFlow(false)
@@ -87,7 +96,8 @@ class LibraryViewModel @Inject constructor(
         repository.observeLibrary(),
         player.state,
         importing,
-    ) { books, playerState, isImporting ->
+        settings.lastBackupAt,
+    ) { books, playerState, isImporting, lastBackup ->
         val items = books.map { it.toItem(playerState) }
         val continueItem = items.filter { it.lastPlayedAt != null }.maxByOrNull { it.lastPlayedAt ?: 0 }
         LibraryUiState(
@@ -96,6 +106,7 @@ class LibraryViewModel @Inject constructor(
             continueListening = continueItem,
             continueIsPlaying = continueItem != null && playerState.bookId == continueItem.id && playerState.playWhenReady,
             importing = isImporting,
+            lastBackupAt = lastBackup,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryUiState())
 
@@ -125,6 +136,20 @@ class LibraryViewModel @Inject constructor(
             }
             downloads.start(link, options)
             messages.send(LibraryMessage.DownloadStarted)
+        }
+    }
+
+    fun exportBackup(uri: Uri) {
+        viewModelScope.launch {
+            val result = runCatching { backup.exportTo(uri) }
+            messages.send(if (result.isSuccess) LibraryMessage.Exported else LibraryMessage.Failed(result.exceptionOrNull()?.localizedMessage))
+        }
+    }
+
+    /** "Arquivo ausente": o usuário apontou o arquivo do livro restaurado do backup. */
+    fun relink(bookId: String, uri: Uri) {
+        viewModelScope.launch {
+            runCatching { backup.relink(bookId, uri) }.onFailure { messages.send(LibraryMessage.Failed(it.localizedMessage)) }
         }
     }
 

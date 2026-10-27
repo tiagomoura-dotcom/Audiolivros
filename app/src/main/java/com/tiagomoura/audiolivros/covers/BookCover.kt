@@ -19,7 +19,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
+import coil3.request.CachePolicy
+import coil3.request.ImageRequest
 import com.tiagomoura.audiolivros.R
 import com.tiagomoura.audiolivros.core.theme.Literata
 import com.tiagomoura.audiolivros.core.theme.Raios
@@ -45,8 +49,18 @@ fun BookCover(
             .background(Color(placeholderColor)),
     ) {
         if (coverPath != null) {
+            val context = LocalContext.current
+            val file = File(coverPath)
+            // A chave inclui a data do arquivo: trocar a capa mostra a imagem nova na hora.
+            val request = remember(coverPath, file.lastModified()) {
+                ImageRequest.Builder(context)
+                    .data(file)
+                    .memoryCacheKey("$coverPath:${file.lastModified()}")
+                    .diskCachePolicy(CachePolicy.DISABLED)
+                    .build()
+            }
             AsyncImage(
-                model = File(coverPath),
+                model = request,
                 contentDescription = description,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize(),

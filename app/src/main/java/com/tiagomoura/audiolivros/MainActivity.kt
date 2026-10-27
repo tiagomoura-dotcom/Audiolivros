@@ -21,6 +21,7 @@ import com.tiagomoura.audiolivros.core.theme.Fundo
 import com.tiagomoura.audiolivros.library.LibraryScreen
 import com.tiagomoura.audiolivros.player.PlayerScreen
 import com.tiagomoura.audiolivros.player.PlayerViewModel
+import com.tiagomoura.audiolivros.settings.SettingsScreen
 import dagger.hilt.android.AndroidEntryPoint
 
 private const val ROUTE_LIBRARY = "biblioteca"
@@ -29,6 +30,7 @@ private const val ROUTE_PLAYER = "player/{${PlayerViewModel.ARG_BOOK_ID}}"
 private const val ROUTE_CHAPTERS =
     "capitulos/{${ChapterEditorViewModel.ARG_BOOK_ID}}?${ChapterEditorViewModel.ARG_REANALYZE}={${ChapterEditorViewModel.ARG_REANALYZE}}"
 
+private const val ROUTE_SETTINGS = "configuracoes"
 private const val ROUTE_SILENCE = "pausas/{${SilenceViewModel.ARG_BOOK_ID}}"
 
 private fun playerRoute(bookId: String) = "player/$bookId"
@@ -51,7 +53,10 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 NavHost(navController = navController, startDestination = ROUTE_LIBRARY) {
                     composable(ROUTE_LIBRARY) {
-                        LibraryScreen(onOpenBook = { navController.navigate(playerRoute(it)) { launchSingleTop = true } })
+                        LibraryScreen(
+                            onOpenBook = { navController.navigate(playerRoute(it)) { launchSingleTop = true } },
+                            onOpenSettings = { navController.navigate(ROUTE_SETTINGS) { launchSingleTop = true } },
+                        )
                     }
                     composable(
                         route = ROUTE_PLAYER,
@@ -76,6 +81,9 @@ class MainActivity : ComponentActivity() {
                             onBack = { navController.popBackStack() },
                             onSilenceAnalysis = { bookId -> navController.navigate(silenceRoute(bookId)) },
                         )
+                    }
+                    composable(ROUTE_SETTINGS) {
+                        SettingsScreen(onBack = { navController.popBackStack() })
                     }
                     composable(
                         route = ROUTE_SILENCE,

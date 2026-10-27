@@ -3,6 +3,9 @@ package com.tiagomoura.audiolivros.covers
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
+import java.io.ByteArrayInputStream
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileOutputStream
@@ -34,15 +37,16 @@ class CoverStorage @Inject constructor(
             imageBytes.size,
             BitmapFactory.Options().apply { inSampleSize = sampleSize },
         ) ?: return null
+        val upright = rotateByExif(decoded, imageBytes)
 
-        val width = decoded.width
-        val height = decoded.height
+        val width = upright.width
+        val height = upright.height
         val (cropWidth, cropHeight) = if (width * 4 > height * 3) {
             (height * 3 / 4) to height
         } else {
             width to (width * 4 / 3)
         }
-        val cropped = Bitmap.createBitmap(decoded, (width - cropWidth) / 2, (height - cropHeight) / 2, cropWidth, cropHeight)
+        val cropped = Bitmap.createBitmap(upright, (width - cropWidth) / 2, (height - cropHeight) / 2, cropWidth, cropHeight)
         val scale = min(1f, MAX_WIDTH.toFloat() / cropWidth)
         val output = if (scale < 1f) {
             Bitmap.createScaledBitmap(cropped, (cropWidth * scale).roundToInt(), (cropHeight * scale).roundToInt(), true)
@@ -54,6 +58,22 @@ class CoverStorage @Inject constructor(
         file.parentFile?.mkdirs()
         FileOutputStream(file).use { output.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }
         return file.absolutePath
+    }
+
+    /** Fotos da câmera vêm com a rotação só na etiqueta EXIF. */
+    private fun rotateByExif(bitmap: Bitmap, imageBytes: ByteArray): Bitmap {
+        val orientation = runCatching {
+            ExifInterface(ByteArrayInputStream(imageBytes))
+                .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        val degrees = when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> return bitmap
+        }
+        val matrix = Matrix().apply { postRotate(degrees) }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
     fun delete(bookId: String) {
