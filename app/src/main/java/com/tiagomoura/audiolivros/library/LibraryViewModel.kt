@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tiagomoura.audiolivros.core.database.BookStatus
+import com.tiagomoura.audiolivros.core.database.ChapterSource
 import com.tiagomoura.audiolivros.core.database.BookWithProgress
 import com.tiagomoura.audiolivros.player.PlayerConnection
 import com.tiagomoura.audiolivros.player.PlayerUiState
@@ -26,6 +27,7 @@ data class LibraryItem(
     val coverPath: String?,
     val placeholderColor: Int,
     val chapterCount: Int,
+    val chapterSource: ChapterSource?,
     val status: BookStatus,
     val processingProgress: Int,
     val finished: Boolean,
@@ -124,6 +126,7 @@ class LibraryViewModel @Inject constructor(
             coverPath = book.coverPath,
             placeholderColor = book.placeholderColor,
             chapterCount = chapterCount,
+            chapterSource = book.chapterSource,
             status = book.status,
             processingProgress = book.processingProgress,
             finished = book.finished,

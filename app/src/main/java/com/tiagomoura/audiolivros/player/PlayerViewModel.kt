@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tiagomoura.audiolivros.core.database.Book
 import com.tiagomoura.audiolivros.core.database.BookDao
+import com.tiagomoura.audiolivros.core.database.BookmarkDao
 import com.tiagomoura.audiolivros.core.database.ChapterDao
 import com.tiagomoura.audiolivros.core.database.ChapterSource
 import com.tiagomoura.audiolivros.settings.PlaybackSettings
@@ -28,6 +29,8 @@ data class PlayerScreenState(
     val durationMs: Long = 0,
     val speed: Float = 1f,
     val chapter: ChapterPosition = ChapterPosition(0, 1, null, 0, 0),
+    val chapters: List<ChapterPosition> = emptyList(),
+    val bookmarkCount: Int = 0,
     val chapterSource: ChapterSource? = null,
     val skipSeconds: Int = PlaybackSettings.DEFAULT_SKIP_SECONDS,
 ) {
@@ -37,26 +40,33 @@ data class PlayerScreenState(
         get() = if (chapter.durationMs > 0) (chapterElapsedMs.toFloat() / chapter.durationMs).coerceIn(0f, 1f) else 0f
 }
 
+private data class BookTimeline(val book: Book?, val chapters: List<TimelineChapter>, val bookmarkCount: Int)
+
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     bookDao: BookDao,
     chapterDao: ChapterDao,
+    bookmarkDao: BookmarkDao,
     settings: SettingsRepository,
     private val player: PlayerConnection,
 ) : ViewModel() {
 
     val bookId: String = checkNotNull(savedStateHandle.get<String>(ARG_BOOK_ID)) { "bookId ausente" }
 
-    private val timeline = combine(bookDao.observe(bookId), chapterDao.observeForBook(bookId)) { book, chapters ->
-        book to chapters.map { TimelineChapter(it.title, it.startMs) }
+    private val timeline = combine(
+        bookDao.observe(bookId),
+        chapterDao.observeForBook(bookId),
+        bookmarkDao.observeForBook(bookId),
+    ) { book, chapters, bookmarks ->
+        BookTimeline(book, chapters.map { TimelineChapter(it.title, it.startMs) }, bookmarks.size)
     }
 
     val state: StateFlow<PlayerScreenState> = combine(
         timeline,
         player.state,
         settings.playback.map { it.skipIntervalSeconds },
-    ) { (book, chapters), playerState, skipSeconds ->
+    ) { (book, chapters, bookmarkCount), playerState, skipSeconds ->
         if (book == null) return@combine PlayerScreenState(loading = false)
         val isCurrent = playerState.connected && playerState.bookId == book.id
         val duration = if (isCurrent && playerState.durationMs > 0) playerState.durationMs else book.durationMs
@@ -72,13 +82,15 @@ class PlayerViewModel @Inject constructor(
             durationMs = duration,
             speed = if (isCurrent) playerState.speed else 1f,
             chapter = chapterTimeline.positionAt(position),
+            chapters = chapterTimeline.all(),
+            bookmarkCount = bookmarkCount,
             chapterSource = book.chapterSource,
             skipSeconds = skipSeconds,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PlayerScreenState())
 
     private val chapters: StateFlow<List<TimelineChapter>> = timeline
-        .map { it.second }
+        .map { it.chapters }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     init {
@@ -98,6 +110,11 @@ class PlayerViewModel @Inject constructor(
 
     fun nextChapter() {
         currentTimeline().nextTarget(state.value.positionMs)?.let(player::seekTo)
+    }
+
+    fun playChapter(startMs: Long) {
+        player.seekTo(startMs)
+        player.load(bookId, play = true)
     }
 
     /** Busca dentro do capítulo atual; [fraction] vai de 0 a 1. */

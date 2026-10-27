@@ -2,6 +2,8 @@ package com.tiagomoura.audiolivros.library
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -20,24 +22,33 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -50,6 +61,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,11 +69,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tiagomoura.audiolivros.R
+import com.tiagomoura.audiolivros.chapters.shortLabel
 import com.tiagomoura.audiolivros.core.database.BookStatus
 import com.tiagomoura.audiolivros.core.theme.Borda
 import com.tiagomoura.audiolivros.core.theme.Destaque
@@ -69,12 +83,14 @@ import com.tiagomoura.audiolivros.core.theme.Raios
 import com.tiagomoura.audiolivros.core.theme.RotuloSecao
 import com.tiagomoura.audiolivros.core.theme.Superficie
 import com.tiagomoura.audiolivros.core.theme.Superficie2
+import com.tiagomoura.audiolivros.core.theme.Texto
 import com.tiagomoura.audiolivros.core.theme.TextoSecundario
 import com.tiagomoura.audiolivros.core.theme.TextoSobreDestaque
 import com.tiagomoura.audiolivros.core.util.formatDuration
 import com.tiagomoura.audiolivros.core.util.formatRemaining
 import com.tiagomoura.audiolivros.covers.BookCover
 import com.tiagomoura.audiolivros.player.rememberNotificationPermissionRequest
+import kotlinx.coroutines.launch
 
 /** Tipos de audio aceitos pelo importador (seção 4.1). */
 private val AUDIO_MIME_TYPES = arrayOf("audio/*")
@@ -88,6 +104,11 @@ fun LibraryScreen(
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     val requestNotifications = rememberNotificationPermissionRequest()
+    val scope = rememberCoroutineScope()
+    var linkPanelOpen by rememberSaveable { mutableStateOf(false) }
+    val notAvailable: (String) -> Unit = { feature ->
+        scope.launch { snackbar.showSnackbar(context.getString(R.string.ainda_nao_disponivel, feature)) }
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.messageFlow.collect { message ->
@@ -121,7 +142,9 @@ fun LibraryScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item(key = "cabecalho") { Header(state) }
+            item(key = "cabecalho") {
+                Header(state, onSettings = { notAvailable(context.getString(R.string.configuracoes)) })
+            }
 
             state.continueListening?.let { book ->
                 item(key = "continuar") {
@@ -137,27 +160,51 @@ fun LibraryScreen(
                 }
             }
 
-            item(key = "importar") {
-                Button(
-                    onClick = { importLauncher.launch(AUDIO_MIME_TYPES) },
-                    enabled = !state.importing,
-                    shape = Raios.Botao,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 52.dp),
-                ) {
-                    if (state.importing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = TextoSobreDestaque,
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(stringResource(R.string.importando))
-                    } else {
-                        Icon(Icons.Outlined.FolderOpen, contentDescription = null)
-                        Spacer(Modifier.width(10.dp))
-                        Text(stringResource(R.string.importar_arquivo))
+            item(key = "acoes") {
+                Column {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = { importLauncher.launch(AUDIO_MIME_TYPES) },
+                            enabled = !state.importing,
+                            shape = Raios.Botao,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 52.dp),
+                        ) {
+                            if (state.importing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = TextoSobreDestaque,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.importando), maxLines = 1)
+                            } else {
+                                Icon(Icons.Outlined.FolderOpen, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.importar_arquivo), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = { linkPanelOpen = !linkPanelOpen },
+                            shape = Raios.Botao,
+                            border = BorderStroke(1.dp, if (linkPanelOpen) Destaque else Borda),
+                            colors = ButtonDefaults.outlinedButtonColors(containerColor = Superficie, contentColor = Texto),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 52.dp),
+                        ) {
+                            Icon(Icons.Outlined.Link, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.baixar_por_link), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    AnimatedVisibility(visible = linkPanelOpen) {
+                        Box(modifier = Modifier.padding(top = 12.dp)) {
+                            LinkPanel(onDownload = { notAvailable(context.getString(R.string.baixar_por_link)) })
+                        }
                     }
                 }
             }
@@ -189,19 +236,38 @@ fun LibraryScreen(
                     onDelete = { viewModel.delete(book.id) },
                 )
             }
+
+            item(key = "backup") {
+                BackupCard(onExport = { notAvailable(context.getString(R.string.exportar)) })
+            }
         }
     }
 }
 
 @Composable
-private fun Header(state: LibraryUiState) {
-    Column(modifier = Modifier.padding(bottom = 8.dp)) {
+private fun Header(state: LibraryUiState, onSettings: () -> Unit) {
+    Row(verticalAlignment = Alignment.Top, modifier = Modifier.padding(bottom = 8.dp)) {
+        HeaderTexts(state, modifier = Modifier.weight(1f))
+        IconButton(onClick = onSettings, modifier = Modifier.size(48.dp)) {
+            Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.configuracoes), tint = TextoSecundario)
+        }
+    }
+}
+
+@Composable
+private fun HeaderTexts(state: LibraryUiState, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
         Text(
             text = stringResource(R.string.biblioteca_titulo),
             style = MaterialTheme.typography.headlineLarge,
         )
         if (!state.loading) {
-            val books = pluralStringResource(R.plurals.biblioteca_resumo_livros, state.books.size, state.books.size)
+            // Em português, o plural "one" do Android inclui o zero ("0 livro"); por isso o caso à parte.
+            val books = if (state.books.isEmpty()) {
+                stringResource(R.string.biblioteca_resumo_zero)
+            } else {
+                pluralStringResource(R.plurals.biblioteca_resumo_livros, state.books.size, state.books.size)
+            }
             val summary = if (state.processingCount > 0) {
                 stringResource(
                     R.string.biblioteca_resumo_juncao,
@@ -225,6 +291,7 @@ private fun ContinueListeningCard(
 ) {
     Surface(
         color = Superficie,
+        contentColor = Texto,
         shape = Raios.Cartao,
         modifier = Modifier
             .fillMaxWidth()
@@ -352,7 +419,9 @@ private fun BookRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 val details = if (book.chapterCount > 0) {
-                    pluralStringResource(R.plurals.livro_capitulos, book.chapterCount, book.chapterCount)
+                    val count = pluralStringResource(R.plurals.livro_capitulos, book.chapterCount, book.chapterCount)
+                    book.chapterSource?.let { stringResource(R.string.livro_capitulos_origem, count, stringResource(it.shortLabel())) }
+                        ?: count
                 } else if (book.durationMs > 0) {
                     stringResource(R.string.livro_duracao, formatDuration(book.durationMs))
                 } else {
@@ -463,4 +532,94 @@ private fun TextInputDialog(
         confirmButton = { TextButton(onClick = { onConfirm(text) }) { Text(stringResource(R.string.salvar)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancelar)) } },
     )
+}
+
+@Composable
+private fun LinkPanel(onDownload: () -> Unit) {
+    var link by rememberSaveable { mutableStateOf("") }
+    var chaptersAndSubtitles by rememberSaveable { mutableStateOf(true) }
+    var convertToMp3 by rememberSaveable { mutableStateOf(true) }
+    var thumbnailAsCover by rememberSaveable { mutableStateOf(true) }
+
+    Surface(color = Superficie, contentColor = Texto, shape = Raios.Cartao, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            OutlinedTextField(
+                value = link,
+                onValueChange = { link = it },
+                label = { Text(stringResource(R.string.link_do_video)) },
+                singleLine = true,
+                shape = Raios.Botao,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            OptionRow(stringResource(R.string.opcao_capitulos_legenda), chaptersAndSubtitles) { chaptersAndSubtitles = it }
+            OptionRow(stringResource(R.string.opcao_converter_mp3), convertToMp3) { convertToMp3 = it }
+            OptionRow(stringResource(R.string.opcao_miniatura_capa), thumbnailAsCover) { thumbnailAsCover = it }
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onDownload,
+                enabled = link.isNotBlank(),
+                shape = Raios.Botao,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 52.dp),
+            ) {
+                Text(stringResource(R.string.baixar_audio))
+            }
+        }
+    }
+}
+
+@Composable
+private fun OptionRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .toggleable(value = checked, role = Role.Checkbox, onValueChange = onChange),
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = null,
+            colors = CheckboxDefaults.colors(checkedColor = Destaque, checkmarkColor = TextoSobreDestaque, uncheckedColor = Borda),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(text = label, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun BackupCard(onExport: () -> Unit) {
+    Surface(
+        color = Superficie,
+        contentColor = Texto,
+        shape = Raios.Cartao,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = stringResource(R.string.posicoes_e_marcacoes), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = stringResource(R.string.salvas_no_aparelho),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextoSecundario,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            OutlinedButton(
+                onClick = onExport,
+                shape = Raios.Botao,
+                border = BorderStroke(1.dp, Borda),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Texto),
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Icon(Icons.Outlined.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.exportar))
+            }
+        }
+    }
 }

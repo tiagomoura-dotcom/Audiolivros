@@ -81,4 +81,12 @@ class ChapterTimelineTest {
         assertEquals(645_000L, timeline.nextTarget(250_000))
         assertNull(timeline.nextTarget(700_000))
     }
+
+    @Test
+    fun `lista de todos os capítulos com durações calculadas`() {
+        val all = timeline.all()
+        assertEquals(listOf(0L, 250_000L, 645_000L), all.map { it.startMs })
+        assertEquals(listOf(250_000L, 395_000L, 355_000L), all.map { it.durationMs })
+        assertEquals(1, ChapterTimeline(emptyList(), 10_000).all().size)
+    }
 }

@@ -41,6 +41,16 @@ class ChapterTimeline(chapters: List<TimelineChapter>, private val durationMs: L
         return ChapterPosition(index, chapters.size, chapters[index].title, start, end.coerceAtLeast(start))
     }
 
+    /** Todos os capítulos com início e fim, para a lista do player. */
+    fun all(): List<ChapterPosition> {
+        if (chapters.isEmpty()) return listOf(positionAt(0))
+        return chapters.mapIndexed { index, chapter ->
+            val start = if (index == 0) 0 else chapter.startMs
+            val end = chapters.getOrNull(index + 1)?.startMs ?: durationMs
+            ChapterPosition(index, chapters.size, chapter.title, start, end.coerceAtLeast(start))
+        }
+    }
+
     /**
      * Destino do botão "capítulo anterior": se passaram mais de 3 s do início do
      * capítulo atual, volta ao início dele; senão, vai ao início do anterior.

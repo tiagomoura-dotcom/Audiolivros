@@ -18,8 +18,9 @@ val Figtree = FontFamily(
     Font(R.font.figtree_bold, FontWeight.Bold),
 )
 
-private val Titulo = TextStyle(fontFamily = Literata, fontWeight = FontWeight.SemiBold, color = Texto)
-private val Corpo = TextStyle(fontFamily = Figtree, fontWeight = FontWeight.Normal, color = Texto)
+// Sem cor fixa: a cor vem do contexto (por exemplo, texto escuro sobre o botão laranja).
+private val Titulo = TextStyle(fontFamily = Literata, fontWeight = FontWeight.SemiBold)
+private val Corpo = TextStyle(fontFamily = Figtree, fontWeight = FontWeight.Normal)
 
 val AudiolivrosTypography = Typography(
     displaySmall = Titulo.copy(fontSize = 34.sp, lineHeight = 40.sp),

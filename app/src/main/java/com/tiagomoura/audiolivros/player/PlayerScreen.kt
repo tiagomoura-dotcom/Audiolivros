@@ -1,6 +1,7 @@
 package com.tiagomoura.audiolivros.player
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,7 +20,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.BookmarkAdd
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.FastForward
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.ContentCut
 import androidx.compose.material.icons.outlined.FastRewind
 import androidx.compose.material.icons.outlined.Forward10
 import androidx.compose.material.icons.outlined.Forward30
@@ -33,13 +40,21 @@ import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SecondaryTabRow
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -51,10 +66,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -62,6 +81,10 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tiagomoura.audiolivros.R
+import com.tiagomoura.audiolivros.chapters.longLabel
+import com.tiagomoura.audiolivros.core.theme.Divisoria
+import com.tiagomoura.audiolivros.core.theme.Superficie2
+import com.tiagomoura.audiolivros.core.theme.Texto
 import com.tiagomoura.audiolivros.core.theme.Borda
 import com.tiagomoura.audiolivros.core.theme.Destaque
 import com.tiagomoura.audiolivros.core.theme.Raios
@@ -71,6 +94,7 @@ import com.tiagomoura.audiolivros.core.theme.TextoSobreDestaque
 import com.tiagomoura.audiolivros.core.util.formatDuration
 import com.tiagomoura.audiolivros.core.util.formatRemaining
 import com.tiagomoura.audiolivros.covers.BookCover
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,15 +104,48 @@ fun PlayerScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val requestNotifications = rememberNotificationPermissionRequest()
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val notAvailable: (Int) -> Unit = { featureRes ->
+        scope.launch {
+            snackbar.showSnackbar(context.getString(R.string.ainda_nao_disponivel, context.getString(featureRes)))
+        }
+    }
+    var menuOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text(stringResource(R.string.tocando_agora), style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.voltar))
+                    }
+                },
+                actions = {
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.menu))
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            listOf(
+                                R.string.editar_capitulos,
+                                R.string.reanalisar_capitulos,
+                                R.string.exportar_este_livro,
+                                R.string.detalhes_do_arquivo,
+                            ).forEach { item ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(item)) },
+                                    onClick = {
+                                        menuOpen = false
+                                        notAvailable(item)
+                                    },
+                                )
+                            }
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
@@ -120,15 +177,28 @@ fun PlayerScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 8.dp),
         ) {
-            BookCover(
-                title = book.title,
-                coverPath = book.coverPath,
-                placeholderColor = book.placeholderColor,
-                shape = Raios.CapaGrande,
-                initialsSize = 40.sp,
-                initialsPadding = 16.dp,
-                modifier = Modifier.fillMaxWidth(0.62f),
-            )
+            Box(modifier = Modifier.fillMaxWidth(0.62f)) {
+                BookCover(
+                    title = book.title,
+                    coverPath = book.coverPath,
+                    placeholderColor = book.placeholderColor,
+                    shape = Raios.CapaGrande,
+                    initialsSize = 40.sp,
+                    initialsPadding = 16.dp,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                FilledIconButton(
+                    onClick = { notAvailable(R.string.foto_de_capa) },
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = Superficie2, contentColor = Texto),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(10.dp)
+                        .size(48.dp),
+                ) {
+                    Icon(Icons.Outlined.PhotoCamera, contentDescription = stringResource(R.string.foto_de_capa))
+                }
+            }
             Spacer(Modifier.height(24.dp))
             Text(
                 text = book.title,
@@ -166,13 +236,25 @@ fun PlayerScreen(
             )
 
             Spacer(Modifier.height(24.dp))
-            SpeedButton(
-                speed = state.speed,
-                onCycle = viewModel::cycleSpeed,
-                onSetSpeed = viewModel::setSpeed,
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                SpeedButton(
+                    speed = state.speed,
+                    onCycle = viewModel::cycleSpeed,
+                    onSetSpeed = viewModel::setSpeed,
+                    modifier = Modifier.weight(1f),
+                )
+                ActionButton(Icons.Outlined.Timer, stringResource(R.string.timer), Modifier.weight(1f)) {
+                    notAvailable(R.string.timer)
+                }
+                ActionButton(Icons.Outlined.BookmarkAdd, stringResource(R.string.marcar), Modifier.weight(1f)) {
+                    notAvailable(R.string.marcar)
+                }
+                ActionButton(Icons.Outlined.ContentCut, stringResource(R.string.trecho), Modifier.weight(1f)) {
+                    notAvailable(R.string.trecho)
+                }
+            }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(16.dp))
             if (state.durationMs > 0) {
                 Text(
                     text = stringResource(
@@ -184,7 +266,143 @@ fun PlayerScreen(
                     color = TextoSecundario,
                 )
             }
+
+            Spacer(Modifier.height(20.dp))
+            ChaptersAndBookmarks(state = state, onPlayChapter = viewModel::playChapter)
         }
+    }
+}
+
+@Composable
+private fun ChaptersAndBookmarks(state: PlayerScreenState, onPlayChapter: (Long) -> Unit) {
+    var tab by rememberSaveable { mutableStateOf(0) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        SecondaryTabRow(
+            selectedTabIndex = tab,
+            containerColor = MaterialTheme.colorScheme.background,
+            contentColor = Texto,
+            indicator = {
+                TabRowDefaults.SecondaryIndicator(
+                    modifier = Modifier.tabIndicatorOffset(tab),
+                    color = Destaque,
+                )
+            },
+            divider = { HorizontalDivider(color = Divisoria) },
+        ) {
+            Tab(
+                selected = tab == 0,
+                onClick = { tab = 0 },
+                text = { Text(stringResource(R.string.aba_capitulos)) },
+                selectedContentColor = Texto,
+                unselectedContentColor = TextoSecundario,
+            )
+            Tab(
+                selected = tab == 1,
+                onClick = { tab = 1 },
+                text = { Text(stringResource(R.string.aba_marcacoes, state.bookmarkCount)) },
+                selectedContentColor = Texto,
+                unselectedContentColor = TextoSecundario,
+            )
+        }
+        if (tab == 0) {
+            val header = state.chapterSource?.takeIf { state.chapters.size > 1 || state.chapters.firstOrNull()?.title != null }
+                ?.let { source ->
+                    stringResource(
+                        R.string.capitulos_cabecalho,
+                        pluralStringResource(R.plurals.livro_capitulos, state.chapters.size, state.chapters.size),
+                        stringResource(source.longLabel()),
+                    )
+                }
+                ?: stringResource(R.string.sem_capitulos)
+            Text(
+                text = header,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextoSecundario,
+                modifier = Modifier.padding(vertical = 12.dp),
+            )
+            state.chapters.forEach { chapter ->
+                ChapterRow(
+                    chapter = chapter,
+                    isCurrent = chapter.index == state.chapter.index,
+                    listened = state.book?.finished == true || state.positionMs >= chapter.endMs && chapter.endMs > 0,
+                    onClick = { onPlayChapter(chapter.startMs) },
+                )
+            }
+        } else {
+            Text(
+                text = stringResource(R.string.sem_marcacoes),
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextoSecundario,
+                modifier = Modifier.padding(vertical = 16.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChapterRow(chapter: ChapterPosition, isCurrent: Boolean, listened: Boolean, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+    ) {
+        Text(
+            text = (chapter.index + 1).toString(),
+            style = MaterialTheme.typography.labelLarge,
+            color = if (isCurrent) Destaque else TextoSecundario,
+            modifier = Modifier.width(36.dp),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = chapter.title ?: stringResource(R.string.livro_inteiro),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isCurrent) Destaque else Texto,
+                maxLines = 2,
+            )
+            Text(
+                text = if (isCurrent) {
+                    stringResource(R.string.capitulos_cabecalho, formatDuration(chapter.durationMs), stringResource(R.string.tocando))
+                } else {
+                    formatDuration(chapter.durationMs)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = TextoSecundario,
+            )
+        }
+        if (listened && !isCurrent) {
+            Icon(Icons.Outlined.Check, contentDescription = null, tint = TextoSecundario, modifier = Modifier.size(18.dp))
+        }
+    }
+    HorizontalDivider(color = Divisoria)
+}
+
+@Composable
+private fun ActionButton(icon: ImageVector, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(
+        color = Superficie,
+        contentColor = Texto,
+        shape = Raios.Botao,
+        modifier = modifier
+            .heightIn(min = 64.dp)
+            .clickable(onClick = onClick),
+    ) {
+        ActionButtonContent(icon, label)
+    }
+}
+
+@Composable
+private fun ActionButtonContent(icon: ImageVector, label: String) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = TextoSecundario)
+        Spacer(Modifier.height(4.dp))
+        Text(text = label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
     }
 }
 
@@ -291,16 +509,16 @@ private fun ControlButton(icon: ImageVector, description: String, onClick: () ->
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SpeedButton(speed: Float, onCycle: () -> Unit, onSetSpeed: (Float) -> Unit) {
+private fun SpeedButton(speed: Float, onCycle: () -> Unit, onSetSpeed: (Float) -> Unit, modifier: Modifier = Modifier) {
     var fineTuning by remember { mutableStateOf(false) }
     val label = stringResource(R.string.velocidade_valor, PlaybackSpeed.label(speed))
 
     Surface(
         color = Superficie,
+        contentColor = Texto,
         shape = Raios.Botao,
-        modifier = Modifier
-            .heightIn(min = 56.dp)
-            .width(120.dp)
+        modifier = modifier
+            .heightIn(min = 64.dp)
             .combinedClickable(
                 onClickLabel = stringResource(R.string.velocidade),
                 onClick = onCycle,
@@ -308,14 +526,7 @@ private fun SpeedButton(speed: Float, onCycle: () -> Unit, onSetSpeed: (Float) -
                 onLongClick = { fineTuning = true },
             ),
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(vertical = 8.dp),
-        ) {
-            Icon(Icons.Outlined.Speed, contentDescription = null, tint = TextoSecundario)
-            Text(text = label, style = MaterialTheme.typography.labelLarge)
-        }
+        ActionButtonContent(Icons.Outlined.Speed, label)
     }
 
     if (fineTuning) {
